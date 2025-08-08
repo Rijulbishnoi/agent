@@ -2,7 +2,7 @@
 
 from fastapi import FastAPI
 from pydantic import BaseModel
-from agents.mongodb_toolkit_agent import agent_executor
+from agents.mongodb_toolkit_agen import agent_executor
 
 app = FastAPI()
 

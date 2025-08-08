@@ -48,414 +48,149 @@ def convert_to_objectids(query_dict: Dict[str, Any], objectid_fields: list) -> D
 OBJECTID_FIELDS = {
     "pages": ["_id"],
     "contact-tags": ["_id", "company"],
-    "banks": ["_id", "company"],
+    "banks": ["_id", "company", "bankNameId._id"],
     "plans": ["_id"],
-    "lands": ["_id", "company", "country"],
+    "lands": [
+        "_id", "company", "country",
+        "owners[]->_id", "pastOwners[]->_id"
+    ],
     "counters": ["_id"],
-    "lead-assignments": ["_id", "company", "lead", "team", "defaultPrimary", "defaultSecondary", "assignee"],
+    "lead-assignments": [
+        "_id", "assignee", "company", "defaultPrimary", "defaultSecondary", "lead", "team"
+    ],
     "general-expenses": ["_id", "company"],
     "contractor-sub-services": ["_id", "contractorService"],
-    "property-bookings": ["_id", "company", "lead", "project", "property"],
-    "contract-payments": ["_id", "company", "contractor", "project", "contract"],
+    "property-bookings": [
+        "_id", "company", "lead", "project", "property",
+        "clpPhases[]->_id", "documentReferences[]->_id", "extraCharges[]->_id", "timelineDocuments[]->_id"
+    ],
+    "contract-payments": ["_id", "company", "contract", "contractor", "project"],
     "lead-visited-properties": ["_id", "company", "lead", "property"],
     "bhk-types": ["_id"],
     "groups": ["_id", "company"],
-    "leads": ["_id", "company", "project", "broker", "bhk", "bhkType"],
-    "whatsapp-track": ["_id", "company", "campaign", "target"],
+    "leads": ["_id", "bhk", "bhkType", "broker", "company", "project"],
+    "whatsapp-track": ["_id", "campaign", "company", "target"],
     "project-categories": ["_id"],
     "contractor-services": ["_id"],
-    "chats": ["_id", "company", "sender", "group"],
+    "chats": ["_id", "company", "group", "sender", "actions[]->_id"],
     "campaign-payments": ["_id", "company"],
-    "lead-rotations": ["_id", "company", "lead", "team", "assignee"],
+    "lead-rotations": ["_id", "assignee", "company", "lead", "team"],
     "property-booking-payment-links": ["_id", "company"],
-    "agenda-jobs": ["_id"],
-    "properties": ["_id", "company", "project", "propertyUnitSubType", "bhk", "bhkType"],
+    "agenda-jobs": ["_id", "data.campaign", "data.company"],
+    "properties": ["_id", "bhk", "bhkType", "company", "project", "propertyUnitSubType"],
     "property-unit-sub-types": ["_id"],
-    "settings": ["_id", "company"],
+    "settings": [
+        "_id", "company", "attendance.shiftTimingDayWise[]->_id", "credentials.easeBuzz.credentials[]->_id", "general.currency[]->_id"
+    ],
     "user-sessions": ["_id"],
     "lead-notes": ["_id", "company", "lead", "tag"],
-    "projects": ["_id", "company", "land", "category", "country"],
-    "chat-cache": ["_id", "group", "company", "sender"],
-    "brokers": ["_id", "company", "country"],
-    "contracts": ["_id", "company", "contractor", "project"],
+    "projects": [
+        "_id", "company", "land", "category", "country",
+        "blocksResidential[]->_id", "blocksResidential[]->floors[]->_id", "clpPhases[]->_id", "nearByLocations[]->_id",
+        "totalResidential.blocks[]->_id", "totalResidential.blocks[]->floors[]->_id", "totalResidential.blocks[]->floors[]->units[]->_id"
+    ],
+    "chat-cache": ["_id", "group", "company", "sender", "actions[]->_id"],
+    "brokers": ["_id", "company", "country", "bankDetails.bankNameId._id", "documentReferences[]->_id"],
+    "contracts": [
+        "_id", "company", "contractor", "project",
+        "milestones[]->_id", "serviceTypes[]->_id", "witnesses[]->_id"
+    ],
     "bank-names": ["_id"],
-    "countries": ["_id"],
-    "contractors": ["_id", "company", "country"],
+    "countries": ["_id", "states[]->_id", "states[]->cities[]->_id"],
+    "contractors": [
+        "_id", "company", "country", "contactPersons[]->_id", "documents[]->_id", "serviceTypes[]->_id"
+    ],
     "subscription-payments": ["_id", "company", "plan"],
-    "sms-track": ["_id", "company", "campaign", "target"],
-    "attendance": ["_id", "company", "user"],
-    "teams": ["_id", "company", "teamLead", "defaultPrimary", "defaultSecondary"],
+    "sms-track": ["_id", "campaign", "company", "target"],
+    "attendance": ["_id", "company", "user", "logs[]->_id"],
+    "teams": ["_id", "company", "defaultPrimary", "defaultSecondary", "teamLead"],
     "documents-and-priorities": ["_id", "company"],
-    "broker-payments": ["_id", "company", "project", "property", "booking", "lead", "broker"],
+    "broker-payments": ["_id", "booking", "broker", "company", "lead", "project", "property"],
     "rent-payments": ["_id", "company", "project", "property", "tenant"],
-    "email-track": ["_id", "company", "campaign", "target"],
+    "email-track": ["_id", "campaign", "company", "target"],
     "otps": ["_id", "company"],
     "bhk": ["_id"],
     "contractor-job-types": ["_id"],
-    "campaign-templates": ["_id", "company"],
-    "sms-balance-requests": ["_id", "company", "campaignPayment"],
+    "campaign-templates": ["_id", "company", "variables[]->_id"],
+    "sms-balance-requests": ["_id", "campaignPayment", "company"],
     "companies": ["_id", "country", "plan", "superAdmin"],
     "amenities": ["_id"],
-    "chat-groups": ["_id", "company"],
-    "property-payments": ["_id", "company", "project", "property", "booking"],
+    "chat-groups": ["_id", "company", "members[]->_id", "members[]->user"],
+    "property-payments": ["_id", "booking", "company", "project", "property"],
     "permissions": ["_id"],
-    "users": ["_id", "company", "designation"],
-    "miscellaneous-documents": ["_id", "company", "project", "property", "booking"],
+    "users": ["_id", "company", "designation", "groups[]"],
+    "miscellaneous-documents": ["_id", "booking", "company", "project", "property"],
     "campaigns": ["_id", "company"],
     "tags": ["_id", "company"],
-    "tenants": ["_id", "company", "project", "property"],
-    "onboarding-requests": ["_id"],
-    "contacts": ["_id", "company"],
+    "tenants": ["_id", "company", "project", "property", "documentReferences[]->_id", "members[]->_id"],
+    "onboarding-requests": ["_id", "country", "plan"],
+    "contacts": ["_id", "company", "tags[]"],
     "cold-leads": ["_id", "company"],
     "designations": ["_id"]
 }
 
 # Database Schema Knowledge
-SCHEMA_KNOWLEDGE = """
-Database Schema and Relationships:
-
-COLLECTIONS AND THEIR RELATIONSHIPS:
-
-1. pages (Primary Collection)
-   - _id: ObjectId (Primary Key)
-   - No foreign keys
-
-2. contact-tags (Primary Collection)
-   - _id: ObjectId (Primary Key)
-   - company: ObjectId → companies._id (Foreign Key)
-
-3. banks (Primary Collection)
-   - _id: ObjectId (Primary Key)
-   - company: ObjectId → companies._id (Foreign Key)
-
-4. plans (Primary Collection)
-   - _id: ObjectId (Primary Key)
-   - No foreign keys
-
-5. lands (Primary Collection)
-   - _id: ObjectId (Primary Key)
-   - company: ObjectId → companies._id (Foreign Key)
-   - country: ObjectId → countries._id (Foreign Key)
-
-6. counters (Primary Collection)
-   - _id: ObjectId (Primary Key)
-   - No foreign keys
-
-7. lead-assignments (Primary Collection)
-   - _id: ObjectId (Primary Key)
-   - company: ObjectId → companies._id (Foreign Key)
-   - lead: ObjectId → leads._id (Foreign Key)
-   - team: ObjectId → teams._id (Foreign Key)
-   - defaultPrimary: ObjectId → users._id (Foreign Key)
-   - defaultSecondary: ObjectId → users._id (Foreign Key)
-   - assignee: ObjectId → users._id (Foreign Key)
-
-8. general-expenses (Primary Collection)
-   - _id: ObjectId (Primary Key)
-   - company: ObjectId → companies._id (Foreign Key)
-
-9. contractor-sub-services (Primary Collection)
-   - _id: ObjectId (Primary Key)
-   - contractorService: ObjectId → contractor-services._id (Foreign Key)
-
-10. property-bookings (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - lead: ObjectId → leads._id (Foreign Key)
-    - project: ObjectId → projects._id (Foreign Key)
-    - property: ObjectId → properties._id (Foreign Key)
-
-11. contract-payments (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - contractor: ObjectId → contractors._id (Foreign Key)
-    - project: ObjectId → projects._id (Foreign Key)
-    - contract: ObjectId → contracts._id (Foreign Key)
-
-12. lead-visited-properties (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - lead: ObjectId → leads._id (Foreign Key)
-    - property: ObjectId → properties._id (Foreign Key)
-
-13. bhk-types (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - No foreign keys
-
-14. groups (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-
-15. leads (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - project: ObjectId → projects._id (Foreign Key)
-    - broker: ObjectId → brokers._id (Foreign Key)
-    - bhk: ObjectId → bhk._id (Foreign Key)
-    - bhkType: ObjectId → bhk-types._id (Foreign Key)
-
-16. whatsapp-track (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - campaign: ObjectId → campaigns._id (Foreign Key)
-    - target: ObjectId → contacts._id (Foreign Key)
-
-17. project-categories (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - No foreign keys
-
-18. contractor-services (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - No foreign keys
-
-19. chats (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - sender: ObjectId → users._id (Foreign Key)
-    - group: ObjectId → chat-groups._id (Foreign Key)
-
-20. campaign-payments (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-
-21. lead-rotations (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - lead: ObjectId → leads._id (Foreign Key)
-    - team: ObjectId → teams._id (Foreign Key)
-    - assignee: ObjectId → users._id (Foreign Key)
-
-22. property-booking-payment-links (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-
-23. agenda-jobs (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - No foreign keys
-
-24. properties (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - project: ObjectId → projects._id (Foreign Key)
-    - propertyUnitSubType: ObjectId → property-unit-sub-types._id (Foreign Key)
-    - bhk: ObjectId → bhk._id (Foreign Key)
-    - bhkType: ObjectId → bhk-types._id (Foreign Key)
-
-25. property-unit-sub-types (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - No foreign keys
-
-26. settings (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-
-27. user-sessions (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - No foreign keys
-
-28. lead-notes (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - lead: ObjectId → leads._id (Foreign Key)
-    - tag: ObjectId → tags._id (Foreign Key)
-
-29. projects (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - land: ObjectId → lands._id (Foreign Key)
-    - category: ObjectId → project-categories._id (Foreign Key)
-    - country: ObjectId → countries._id (Foreign Key)
-
-30. chat-cache (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - group: ObjectId → chat-groups._id (Foreign Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - sender: ObjectId → users._id (Foreign Key)
-
-31. brokers (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - country: ObjectId → countries._id (Foreign Key)
-
-32. contracts (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - contractor: ObjectId → contractors._id (Foreign Key)
-    - project: ObjectId → projects._id (Foreign Key)
-
-33. bank-names (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - No foreign keys
-
-34. countries (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - No foreign keys
-
-35. contractors (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - country: ObjectId → countries._id (Foreign Key)
-
-36. subscription-payments (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - plan: ObjectId → plans._id (Foreign Key)
-
-37. sms-track (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - campaign: ObjectId → campaigns._id (Foreign Key)
-    - target: ObjectId → contacts._id (Foreign Key)
-
-38. attendance (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - user: ObjectId → users._id (Foreign Key)
-
-39. teams (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - teamLead: ObjectId → users._id (Foreign Key)
-    - defaultPrimary: ObjectId → users._id (Foreign Key)
-    - defaultSecondary: ObjectId → users._id (Foreign Key)
-
-40. documents-and-priorities (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-
-41. broker-payments (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - project: ObjectId → projects._id (Foreign Key)
-    - property: ObjectId → properties._id (Foreign Key)
-    - booking: ObjectId → property-bookings._id (Foreign Key)
-    - lead: ObjectId → leads._id (Foreign Key)
-    - broker: ObjectId → brokers._id (Foreign Key)
-
-42. rent-payments (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - project: ObjectId → projects._id (Foreign Key)
-    - property: ObjectId → properties._id (Foreign Key)
-    - tenant: ObjectId → tenants._id (Foreign Key)
-
-43. email-track (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - campaign: ObjectId → campaigns._id (Foreign Key)
-    - target: ObjectId → contacts._id (Foreign Key)
-
-44. otps (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-
-45. bhk (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - No foreign keys
-
-46. contractor-job-types (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - No foreign keys
-
-47. campaign-templates (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-
-48. sms-balance-requests (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - campaignPayment: ObjectId → campaign-payments._id (Foreign Key)
-
-49. companies (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - country: ObjectId → countries._id (Foreign Key)
-    - plan: ObjectId → plans._id (Foreign Key)
-    - superAdmin: ObjectId → users._id (Foreign Key)
-
-50. amenities (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - No foreign keys
-
-51. chat-groups (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-
-52. property-payments (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - project: ObjectId → projects._id (Foreign Key)
-    - property: ObjectId → properties._id (Foreign Key)
-    - booking: ObjectId → property-bookings._id (Foreign Key)
-
-53. permissions (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - No foreign keys
-
-54. users (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - designation: ObjectId → designations._id (Foreign Key)
-
-55. miscellaneous-documents (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - project: ObjectId → projects._id (Foreign Key)
-    - property: ObjectId → properties._id (Foreign Key)
-    - booking: ObjectId → property-bookings._id (Foreign Key)
-
-56. campaigns (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-
-57. tags (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-
-58. tenants (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-    - project: ObjectId → projects._id (Foreign Key)
-    - property: ObjectId → properties._id (Foreign Key)
-
-59. onboarding-requests (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - No foreign keys
-
-60. contacts (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-
-61. cold-leads (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - company: ObjectId → companies._id (Foreign Key)
-
-62. designations (Primary Collection)
-    - _id: ObjectId (Primary Key)
-    - No foreign keys
-
+SCHEMA_KNOWLEDGE = """SCHEMAS: Dict[str, Dict[str, Any]] = {
+"companies":{"fields":{"_id":"id","clientName":"str","name":"str","contactPersonName":"str","subDomain":"str","primaryPhone":"str","secondaryPhone":"str","primaryEmail":"str","contactPersonEmail":"str","contactPersonPhone":"str","address":"str","country":"id","state":"id","city":"id","addOnServices":"array<enum:Sms|Email|IVR>","plan":"id","planStartDate":"datetime","planEndDate":"datetime","maxNoOfUsers":"int","maxNoOfProjects":"int","amountPaid":"number","totalGeneralExpenses":"number","allowPlanRenewalOnSamePrice":"bool","smartPingBalance":"int","createdAt":"datetime"}},
+"contracts":{"fields":{"_id":"id","amount":"number","anyReasonableExpenses":"number","chargesOnLatePayment":"number","company":"id","contractRate":"number","contractRateType":"enum:Hourly|Weekly","contractor":"id","startDate":"datetime","endDate":"datetime","generatedReferenceNo":"str","isSubContractAllowed":"bool","milestones":"array<object>","payForEachInvoiceDue":"bool","project":"id","scopeOfWork":"str","serviceTypes":"array<str>","terminationPeriod":"number","witnesses":"array<object>"}},
+"contractors":{"fields":{"_id":"id","company":"id","name":"str","countryCode":"str","phone":"str","email":"str","address":"str","country":"id","state":"id","city":"id","zipCode":"str","contractorType":"enum:Firm|Individual","contractorRateType":"enum:Hourly|Weekly","suitableFor":"enum:Residential|Commercial","isGoodsSupplier":"bool","yearsOfExperience":"int","createdAt":"datetime","updatedAt":"datetime"}},
+"contract-payments":{"fields":{"_id":"id","company":"id","contractor":"id","project":"id","contract":"id","ordinal":"int","amount":"number","paymentStatus":"enum:Paid|Due","paymentMode":"enum:Cash|Cheque|Online","generatedReferenceNo":"str","referenceNo":"str","dueDate":"datetime","receivedOn":"datetime","createdAt":"datetime","updatedAt":"datetime"}},
+"brokers":{"fields":{"_id":"id","company":"id","name":"str","phone":"str","country":"id","city":"id","state":"id","address":"str","zipCode":"str","documentReferences":"array<object<title:str,referenceNo:str,_id:id>>","commissionPercent":"number","realEstateLicenseDetails":"object<licenseNo:str,licenseIssueDate:datetime,licenseExpirationDate:datetime>","yearStartedInRealEstate":"int","createdAt":"datetime","updatedAt":"datetime"}},
+"broker-payments":{"fields":{"_id":"id","company":"id","project":"id","property":"id","booking":"id","lead":"id","broker":"id","amount":"number","paymentStatus":"enum:Paid|Due","paymentMode":"enum:Cash|Online|Cheque","generatedReferenceNo":"str","paidOn":"datetime","createdAt":"datetime","updatedAt":"datetime"}},
+"cold-leads":{"fields":{"_id":"id","company":"id","countryCode":"str","phone":"str","coldLeadStatus":"enum:Pending|Converted","createdAt":"datetime","updatedAt":"datetime"}},
+"general-expenses":{"fields":{"_id":"id","company":"id","payeeName":"str","expenseType":"enum:Against Salary","amount":"number","taxes":"number","payableAmount":"number","paymentMode":"enum:Cash|Cheque|Online","generatedReferenceNo":"str","referenceNo":"str","dateOfPayment":"datetime","createdAt":"datetime","updatedAt":"datetime"}},
+"lands":{"fields":{"_id":"id","company":"id","name":"str","propertyType":"array<enum:Residential|Commercial>","address":"str","country":"id","state":"id","city":"id","zipCode":"str","location":"object","purchasePrice":"number","currentMarketValue":"number","isOnLease":"bool","rentalIncome":"number","occupancyStatus":"enum:Vacant|Occupied","nearByArea":"str","isAnyConstructionExists":"bool","plotSize":"number","sizeType":"enum:Square Meters|Hectares|Gaj|Square Feet|Square Yards|Acres","amenities":"array<id>","owners":"array<object>","createdAt":"datetime","updatedAt":"datetime"}},
+"lead-assignments":{"fields":{"_id":"id","company":"id","lead":"id","team":"id","defaultPrimary":"id","defaultSecondary":"id","assignee":"id","createdAt":"datetime","updatedAt":"datetime"}},
+"lead-notes":{"fields":{"_id":"id","company":"id","lead":"id","communicationType":"enum:Call|In Person|WhatsApp","meetingDateTime":"datetime","siteVisitStatus":"enum:Pending|Scheduled|Visited","siteVisitScheduledDate":"datetime","nextSiteVisitScheduledDate":"datetime","callDuration":"number","receiverPhone":"str","virtualPhone":"str","callDate":"datetime","createdAt":"datetime"}},
+"lead-rotations":{"fields":{"_id":"id","company":"id","lead":"id","team":"id","assignee":"id","date":"datetime","createdAt":"datetime","updatedAt":"datetime"}},
+"leads": {"fields": {"_id":"id","broker":"id","buyingTimeline":["0 TO 3 months","0 TO 6 months"],"commissionPercent":3,"company":"id","createdAt":["2025-03-31T06:55:42.351Z"],"email":["is@mail.com"],"leadStatus":["On going","Converted","Temporary Converted"],"maxBudget":1000,"minBudget":1000,"name":["Ishaan"],"phone":["9883726473"],"project":"id","propertyType":["Residential","Commercial"],"rotationCount":9,"secondaryPhone":["7689001334"],"sourceType":["Direct","Broker","Housing.com","99acres.com","MagicBricks.com"],"updatedAt": ["2025-03-31T11:38:15.076Z"],"bhk":"id","bhkType":"id"}},
+"lead-visited-properties":{"fields":{"_id":"id","company":"id","lead":"id","property":"id","createdAt":"datetime","updatedAt":"datetime"}},
+"plans":{"fields":{"_id":"id","name":"str","paymentDuration":"enum:Monthly|Quarterly|Yearly","price":"number","description":"str","features":"array<str>","maxNoOfUsers":"int","maxNoOfProjects":"int","priceInUSD":"number"}},
+"projects":{"fields":{"_id":"id","company":"id","land":"id","name":"str","projectType":"array<enum:Residential|Commercial>","projectUnitSubType":"array<id>","category":"id","projectStatus":"enum:Under construction","minBudget":"number","maxBudget":"number","startDate":"datetime","completionDate":"datetime","address":"str","country":"id","state":"id","city":"id","zipCode":"str","location":"object","reraRegistrationNumber":"str","projectRegistrationNumber":"str","isGovtApproved":"bool","govtApprovedDocuments":"array<str>","noOfUnitsResidential":"int","noOfBlocksResidential":"int","blocksResidential":"array<object>"}},
+"properties":{"fields":{"_id":"id","company":"id","project":"id","propertyType":"enum:Residential|Commercial","propertyUnitSubType":"id","bhk":"id","bhkType":"id","blockName":"str","floorName":"str","series":"str","flatNo":"int","furnishedStatus":"enum:Furnished|Unfurnished|Semi-furnished","minBudget":"number","maxBudget":"number","facing":"enum:North|East|West|South","vastuCompliant":"bool","propertyArea":"number","carpetArea":"number","builtUpArea":"number","superBuiltUpArea":"number","propertyAreaType":"enum:Square Feet|Square Meters","noOfBalconies":"int","noOfBathRooms":"int","noOfBedRooms":"int","noOfKitchens":"int","noOfDrawingRooms":"int","noOfParkingLots":"int","propertyStatus":"enum:Available|Sold|Pending","createdAt":"datetime","updatedAt":"datetime"}},
+"property-bookings":{"fields":{"_id":"id","company":"id","lead":"id","project":"id","property":"id","bookingDate":"datetime","bookingType":"enum:Temporary Booking|Final Booking","saleablePrice":"number","basicPrice":"number","bookingAmount":"number","taxPercent":"number","taxAmount":"number","bookingPaymentStatus":"enum:Paid|Due|Refunded","paymentTerm":"enum:Loan|Without Loan","financeDeptStatus":"enum:Pending|Accepted|Rejected","extraCharges":"array<object<chargeFor:str,amount:number,_id:id>>","createdAt":"datetime","updatedAt":"datetime"}},
+"property-payments":{"fields":{"_id":"id","company":"id","project":"id","property":"id","booking":"id","paymentType":"enum:Booking Amount|CLP","transactionType":"enum:Credit|Debit","amount":"number","paymentStatus":"enum:Paid|Due","paymentMode":"enum:Cash|Cheque|Online","receivedOn":"datetime","generatedReferenceNo":"str","referenceNo":"str","dueFrom":"str","clpPhase":"str","ordinal":"int","createdAt":"datetime","updatedAt":"datetime"}},
+"rent-payments":{"fields":{"_id":"id","company":"id","project":"id","property":"id","tenant":"id","startDate":"datetime","endDate":"datetime","amount":"number","amountPaid":"number","paymentStatus":"enum:Paid|Due","paymentMode":"enum:Cash|Online|Cheque","generatedReferenceNo":"str","documentSerialNo":"str","paymentReceipt":"str","referenceNo":"str","receivedOn":"datetime","paymentInfo":"array<object>","partialPayments":"array<object>","createdAt":"datetime","updatedAt":"datetime"}},
+"tenants":{"fields":{"_id":"id","company":"id","project":"id","property":"id","name":"str","countryCode":"str","phone":"str","email":"str","totalMember":"int","members":"array<object<name:str,age:int,relation:str,_id:id>>","isPets":"bool","bookingDate":"datetime","bookingType":"enum:Temporary Booking|Final Booking","rentAmount":"number","rentIncrement":"number","depositAmount":"number","adjustedDepositAmount":"number","depositPaymentMode":"enum:Cash|Cheque|Online","depositReferenceNo":"str","isMaintenanceIncluded":"bool","isPoliceVerificationDone":"bool","rentStartDate":"datetime","rentAgreementStartDate":"datetime","dueRentAmount":"number","rentPaymentGeneratedOn":"datetime","tenantStatus":"enum:Left|Staying|Temporary Staying","leavingDate":"datetime","createdAt":"datetime","updatedAt":"datetime"}},
+"amenities":{"fields":{"_id":"id","name":"str","amenityType":"enum:Land|Project","createdAt":"datetime","updatedAt":"datetime"}}
+
+}
 USER-BASED FILTERING:
-- Users can only see data from their own company
-- Super admins can see all data
-- Regular users are filtered by company field
-- Use user_id to get user permissions and company access
+- Users can only see data from their own company.
+- Super admins can see all data.
+- Regular users are filtered by company field.
+- Use user_id to get user permissions and company access.
+
+FIELD VALUE CLARIFICATIONS:
+- In the 'leads' collection, the 'status' field indicates general activity with possible values like 'active', 'inactive'. If a query involves 'active leads', assume 'status' = 'active' unless otherwise specified by the user.
+- In the 'leads' collection, the 'leadStatus' field tracks specific stages such as 'New', 'In Progress', 'Closed - Won', 'Closed - Lost'. If a query does not specify a value, consult user or context for clarification.
+- For other collections, if a status field’s value (e.g., 'active', 'inactive') is ambiguous in a query, the agent should prompt the user for the exact value or assume common conventions (e.g., 'status' = 'active') while noting this assumption.
 
 AGGREGATION EXAMPLES:
-- "Top performing team": Group leads by assignedTo → users.team, count "Closed - Won" status
-- "Total rent by tenant": Group rent-payments by tenant, sum amounts
-- "Lead conversion rate": Count leads by status, calculate percentages
-- "Revenue by property": Group rent-payments by property, sum amounts
-- "Broker performance": Group broker-payments by broker, sum amounts
-- "Project revenue": Group property-payments by project, sum amounts
+- "Top performing team": Group leads by assignedTo -> users.team, count "Closed - Won" status.
+- "Total rent by tenant": Group rent-payments by tenant, sum amounts.
+- "Lead conversion rate": Count leads by status, calculate percentages.
+- "Revenue by property": Group rent-payments by property, sum amounts.
+- "Broker performance": Group broker-payments by broker, sum amounts.
+- "Project revenue": Group property-payments by project, sum amounts.
+- "Active leads count": Count leads where status = 'active' or leadStatus = 'New' or 'In Progress'.
 
 QUERY EXAMPLES:
-- "Show all leads for company X": Query leads where company = company_id
-- "Find users who are super admins": Query companies where superAdmin exists, then get user details
-- "Get total rent paid by tenant": Use aggregation to group and sum
-- "Show properties for a specific project": Query properties where project = project_id
-- "Find all bookings for a lead": Query property-bookings where lead = lead_id
-- "Get all payments for a property": Query property-payments where property = property_id
-"""
+- "Show all leads for company X": Query leads where company = company_id.
+- "Find users who are super admins": Query companies where superAdmin exists, then get user details.
+- "Get total rent paid by tenant": Use aggregation to group and sum.
+- "Show properties for a specific project": Query properties where project = project_id.
+- "Find all bookings for a lead": Query property-bookings where lead = lead_id.
+- "Get all payments for a property": Query property-payments where property = property_id.
+- "Count active leads": Query leads where status = 'active' or leadStatus in ['New', 'In Progress'].
 
+NOTES:
+- Use only the fields and relationships listed above for queries and aggregations.
+- Use $lookup pipelines strictly for documented foreign keys.
+- Filter data using documented company, user, and permission constraints.
+- If a field value (e.g., for 'status' or 'leadStatus') is not explicitly defined in a query and not clear from context, make a reasonable assumption (e.g., 'status' = 'active' for active leads) and state this assumption in the thought process, or prompt the user for clarification.
+- When in doubt, refer to this section for guidance on schema structure and field interpretations.
+"""
 # Custom MongoDB Tools
 class MongoDBQueryInput(BaseModel):
     query: str = Field(description="The MongoDB query in JSON format")
@@ -512,64 +247,46 @@ class MongoDBQueryTool(BaseTool):
             # Note: user_id should be passed from the agent executor context
             if user_id:
                 try:
-                    # Get user details and permissions - use _id for users collection
                     user = await db.users.find_one({"_id": ObjectId(user_id)})
                     if not user:
                         return f"Error: User with ID {user_id} not found"
                     
-                    user_company = user.get("company")
-                    user_permissions = user.get("permissions", [])
-                    
-                    # Check if user is super admin - use _id for companies collection
-                    is_super_admin = await db.companies.find_one({"superAdmin": ObjectId(user_id)})
-                    
-                    # Apply user-based filtering for non-super admins
-                    if not is_super_admin and user_company:
-                        # Add appropriate filter based on collection
+                    user_permissions = user.get("permissions", {})
+                    is_super_admin = "super_admin" in user_permissions or "admin" in user_permissions
+
+                    # Only allow access to user's own data unless super admin
+                    if not is_super_admin:
                         if collection_name == "users":
-                            # For users collection, filter by current user ID
+                            # Only allow access to own user document
                             if "_id" in mongo_query:
-                                if mongo_query["_id"] != user_id:
+                                if mongo_query["_id"] != ObjectId(user_id):
                                     return "Error: You can only access your own user data"
                             else:
                                 mongo_query["_id"] = ObjectId(user_id)
                         elif collection_name in ["leads", "lead-assignments"]:
-                            # For leads, filter by assignedTo field
+                            # Only allow access to leads assigned to the user
                             if "assignedTo" in mongo_query:
                                 if mongo_query["assignedTo"] != ObjectId(user_id):
                                     return "Error: You can only access leads assigned to you"
                             else:
                                 mongo_query["assignedTo"] = ObjectId(user_id)
-                        else:
-                            # For other collections, filter by company
-                            if "company" in mongo_query:
-                                if mongo_query["company"] != user_company:
-                                    return "Error: You can only access data from your own company"
-                            else:
-                                mongo_query["company"] = user_company
-                    
-                    # Apply permission-based filtering
-                    if not is_super_admin:
-                        # Check if user has permission to access this collection
-                        # Common permission patterns: "leads[]", "users[]", "companies[]", etc.
-                        collection_permission = f"{collection_name}[]"
-                        read_permission = f"{collection_name}.read"
-                        write_permission = f"{collection_name}.write"
-                        
-                        # Check for various permission formats
-                        has_permission = (
-                            collection_permission in user_permissions or
-                            read_permission in user_permissions or
-                            write_permission in user_permissions or
-                            "admin" in user_permissions or
-                            "super_admin" in user_permissions
-                        )
-                        
-                        if not has_permission:
-                            return f"Error: You don't have permission to access {collection_name}. Required permissions: {collection_permission}, {read_permission}, or {write_permission}. Your permissions: {user_permissions}"
-                            
+                        # For all other collections, do NOT filter by company
+
+                    # Permission check (dictionary-based)
+                    collection_perms = user_permissions.get(collection_name) or user_permissions.get(f"permissions.{collection_name}")
+                    has_permission = False
+                    if collection_perms:
+                        if "read" in collection_perms or "write" in collection_perms:
+                            has_permission = True
+                    if "admin" in user_permissions or "super_admin" in user_permissions:
+                        has_permission = True
+
+                    if not has_permission:
+                        return f"Error: You don't have permission to access {collection_name}. Your permissions: {user_permissions}"
+
                 except Exception as e:
                     return f"Error applying user filtering: {str(e)}"
+
             
             if count:
                 # Count documents
@@ -722,17 +439,32 @@ class MongoDBAggregationTool(BaseTool):
                         write_permission = f"{collection_name}.write"
                         
                         # Check for various permission formats
-                        has_permission = (
-                            collection_permission in user_permissions or
-                            read_permission in user_permissions or
-                            write_permission in user_permissions or
-                            "admin" in user_permissions or
-                            "super_admin" in user_permissions
-                        )
+               #         has_permission = (
+                #            collection_permission in user_permissions or
+                 #           read_permission in user_permissions or
+                  #          write_permission in user_permissions or
+                   #         "admin" in user_permissions or
+                    #        "super_admin" in user_permissions
+                     #   )
                         
+                      #  if not has_permission:
+                       #     return f"Error: You don't have permission to access {collection_name}. Required permissions: {collection_permission}, {read_permission}, or {write_permission}. Your permissions: {user_permissions}"
+                        user_permissions = user.get("permissions", {})
+                        is_super_admin = "super_admin" in user_permissions or "admin" in user_permissions
+
+                        # Check for dictionary-based permissions
+                        collection_perms = user_permissions.get(collection_name) or user_permissions.get(f"permissions.{collection_name}")
+                        has_permission = False
+                        if collection_perms:
+                            if "read" in collection_perms or "write" in collection_perms:
+                                has_permission = True
+                        if "admin" in user_permissions or "super_admin" in user_permissions:
+                            has_permission = True
+
                         if not has_permission:
-                            return f"Error: You don't have permission to access {collection_name}. Required permissions: {collection_permission}, {read_permission}, or {write_permission}. Your permissions: {user_permissions}"
-                            
+                            return f"Error: You don't have permission to access {collection_name}. Your permissions: {user_permissions}"
+
+                
                 except Exception as e:
                     return f"Error applying user filtering: {str(e)}"
             
@@ -759,16 +491,14 @@ class MongoDBGetUserPermissionsInput(BaseModel):
 
 class MongoDBGetUserPermissionsTool(BaseTool):
     name: str = "mongodb_get_user_permissions"
-    description: str = "Get user permissions and company access for filtering queries"
+    description: str = "Get user permissions for filtering queries"
     args_schema: Type[BaseModel] = MongoDBGetUserPermissionsInput
 
     def _run(self, user_id: str) -> str:
-        # Synchronous version - not used but required
         return "This tool only supports async operations"
 
     async def _arun(self, user_id: str) -> str:
         try:
-            # Get user_id from global context if not provided
             global current_user_context
             if not user_id:
                 user_id = current_user_context.get("user_id")
@@ -780,30 +510,21 @@ class MongoDBGetUserPermissionsTool(BaseTool):
             if not user:
                 return f"Error: User with ID {user_id} not found"
             
-            # Get user's company details
-            user_company = user.get("company")
-            company_details = None
-            if user_company:
-                company_details = await db.companies.find_one({"_id": user_company})
-            
-            # Check if user is super admin
-            is_super_admin = await db.companies.find_one({"superAdmin": ObjectId(user_id)})
+            permissions = user.get("permissions", [])
+            is_super_admin = "super_admin" in permissions or "admin" in permissions
             
             result = {
                 "user_id": user_id,
                 "user_name": user.get("name"),
                 "user_email": user.get("email"),
-                "company_id": str(user_company) if user_company else None,
-                "company_name": company_details.get("name") if company_details else None,
-                "is_super_admin": bool(is_super_admin),
-                "permissions": user.get("permissions", [])
+                "is_super_admin": is_super_admin,
+                "permissions": permissions
             }
             
             return f"User permissions: {json.dumps(result, default=str, indent=2)}"
             
         except Exception as e:
             return f"Error getting user permissions: {str(e)}"
-
 class MongoDBListCollectionsInput(BaseModel):
     dummy: str = Field(description="Dummy field, not used")
 
@@ -875,82 +596,46 @@ tools = [
 ]
 
 # Create the ReAct prompt template
-react_prompt = PromptTemplate.from_template("""You are a helpful AI assistant that can answer questions about the MongoDB database with user-based filtering and aggregation support. You have access to the following tools:
+react_prompt = PromptTemplate.from_template("""You are a helpful AI assistant for MongoDB queries with user-based filtering. Tools: {tools} ONLY.
 
-{tools}
-
-Use the following format:
-
-Question: the input question you must answer
-Thought: you should always think about what to do
-Action: the action to take, should be one of [{tool_names}]
-Action Input: the input to the action
-Observation: the result of the action
-... (this Thought/Action/Action Input/Observation can repeat N times)
-Thought: I now know the final answer
-Final Answer: the final answer to the original input question
-
-IMPORTANT GUIDELINES:
-1. ALWAYS use mongodb_aggregation tool for complex queries (grouping, counting, joining collections)
-2. Use mongodb_query tool only for simple lookups
-3. ALWAYS include relevant fields from related collections using $lookup
-4. Filter results by CURRENT USER's ID or company using foreign key relationships
-5. For user-specific data, use $match with current user's ID or company ID
-6. Include meaningful fields like name, email, status, amount, etc. in results
-7. Use $project to show only relevant fields for better user experience
-8. For relationships, use proper ObjectId field names from schema
-9. Always apply user-based filtering for security (current user's data only)
-
-AGGREGATION FORMATS:
-- Current user's data: {{"collection": "users", "stages": [{{"$match": {{"_id": "CURRENT_USER_ID"}}}}, {{"$project": {{"name": 1, "email": 1, "company": 1}}}}]}}
-- User's company data: {{"collection": "tenants", "stages": [{{"$match": {{"company": "USER_COMPANY_ID"}}}}, {{"$count": "total"}}]}}
-- User's assigned leads: {{"collection": "leads", "stages": [{{"$match": {{"assignedTo": "CURRENT_USER_ID"}}}}, {{"$lookup": {{"from": "users", "localField": "assignedTo", "foreignField": "_id", "as": "assignee"}}}}, {{"$project": {{"name": 1, "status": 1, "assignee_name": "$assignee.name"}}}}]}}
-- User's company payments: {{"collection": "rent-payments", "stages": [{{"$match": {{"company": "USER_COMPANY_ID"}}}}, {{"$lookup": {{"from": "tenants", "localField": "tenant", "foreignField": "_id", "as": "tenant_info"}}}}, {{"$project": {{"amount": 1, "tenant_name": "$tenant_info.name"}}}}]}}
-- Note: CURRENT_USER_ID and USER_COMPANY_ID are automatically replaced
-
-OBJECTID FIELDS BY COLLECTION (Key Collections):
-- leads: _id, company, project, broker, bhk, bhkType
-- users: _id, company, designation
-- companies: _id, country, plan, superAdmin
-- teams: _id, company, teamLead, defaultPrimary, defaultSecondary
-- properties: _id, company, project, propertyUnitSubType, bhk, bhkType
-- projects: _id, company, land, category, country
-- rent-payments: _id, company, project, property, tenant
-- tenants: _id, company, project, property
-- brokers: _id, company, country
-- contractors: _id, company, country
-- campaigns: _id, company
-- lead-assignments: _id, company, lead, team, defaultPrimary, defaultSecondary, assignee
-- property-bookings: _id, company, lead, project, property
-- property-payments: _id, company, project, property, booking
-- broker-payments: _id, company, project, property, booking, lead, broker
-- contract-payments: _id, company, contractor, project, contract
-- lead-notes: _id, company, lead, tag
-- chats: _id, company, sender, group
-- attendance: _id, company, user
-
-AGGREGATION EXAMPLES:
-- Current user's name: Match by current user ID, project name field
-- User's assigned leads: Match by current user ID in assignedTo field
-- User's company tenants: Match by user's company ID
-- User's company payments: Match by company, lookup tenant details
-- User's lead assignments: Match by current user ID in assignee field
-- User's company properties: Match by company, include project details
-
-USER-BASED FILTERING:
-- ALWAYS use aggregation pipelines for complex queries
-- Filter results by CURRENT USER's ID or company using foreign key relationships
-- Include relevant fields from related collections using $lookup
-- Use $project to show meaningful fields (name, email, status, amount, etc.)
-- Replace CURRENT_USER_ID and USER_COMPANY_ID placeholders automatically
-- For relationships, use proper ObjectId field names from schema
-- Always apply user-based filtering for security (current user's data only)
-- Include fields like: name, email, phone, status, amount, clientName, etc.
-- For user-specific queries, match by current user's ID
-- For company-wide queries, match by user's company ID
+Use EXACT format ALWAYS. If insufficient info: "Thought: Insufficient information" and "Final Answer: Cannot provide answer due to missing data."
 
 Question: {input}
-{agent_scratchpad}""")
+Thought: Step-by-step reasoning. Verify schema/knowledge. No assumptions. Dynamically adapt queries/aggregations from schema fields and relationships.
+Action: One of [{tool_names}]. mongodb_aggregation for complex; mongodb_query for simple lookups.
+Action Input: Valid JSON using ONLY schema fields/relationships.
+Observation: Result
+... (Max 3 repeats. Use {agent_scratchpad}.)
+Thought: Final answer ready based on observations.
+Final Answer: Clean JSON with relevant fields ONLY.
+
+GUIDELINES:
+1. Build EVERY query/aggregation dynamically from schema knowledge (fields, relationships); no fixed templates.
+2. mongodb_aggregation for grouping/counting/joining; adapt stages to exact schema.
+3. mongodb_query ONLY for simple ID lookups.
+4. Use $lookup with EXACT schema fields/foreign keys; no invented joins.
+5. ALWAYS filter by CURRENT_USER_ID in FIRST $match; adapt to schema relationships.
+6. Project ONLY meaningful fields if in schema.
+7. Use exact ObjectId names; no guesses.
+8. Restrict to user's data; reject if unfilterable.
+9. No hallucinations; note missing fields in Thought.
+10. Replace placeholders if provided; else stop.
+
+SCHEMA KNOWLEDGE:
+
+USER FILTERING:
+- Dynamically filter by CURRENT_USER_ID/company via schema relationships ONLY.
+- User queries: Match CURRENT_USER_ID first, adapt to schema.
+- Company queries: Match USER_COMPANY_ID first, adapt to schema.
+- $lookup with exact fields; project schema-only fields.
+- Reject if impossible; exclude non-schema fields, note in Thought.
+
+EXAMPLES (For guidance; adapt dynamically to schema):
+- User's name: Simple query on users, match _id = CURRENT_USER_ID, project name.
+- Assigned leads: Aggregate leads, match assignedTo = CURRENT_USER_ID, lookup users if needed, project name/status.
+
+Scratchpad: {agent_scratchpad}
+""")
 
 # Create ReAct agent with the prompt
 agent = create_react_agent(llm=llm, tools=tools, prompt=react_prompt)
