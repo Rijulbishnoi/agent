@@ -10,8 +10,6 @@ from langchain.tools import BaseTool
 from typing import Optional, Type, Any, Dict
 from pydantic import BaseModel, Field
 from bson import ObjectId
-from typing import Optional
-from bson import ObjectId
 
 # Configure Google Gemini API key
 genai.configure(api_key=settings.gemini_api_key)
@@ -46,6 +44,28 @@ def convert_to_objectids(query_dict: Dict[str, Any], objectid_fields: list) -> D
             result[key] = value
     return result
 
+def replace_placeholders_recursively(obj, user_id, user_company):
+    """Recursively replace placeholders in any nested structure"""
+    if isinstance(obj, dict):
+        result = {}
+        for key, value in obj.items():
+            if value == "CURRENT_USER_ID":
+                result[key] = ObjectId(user_id) if user_id else value
+            elif value == "USER_COMPANY_ID":
+                result[key] = ObjectId(user_company) if user_company else value
+            else:
+                result[key] = replace_placeholders_recursively(value, user_id, user_company)
+        return result
+    elif isinstance(obj, list):
+        return [replace_placeholders_recursively(item, user_id, user_company) for item in obj]
+    else:
+        if obj == "CURRENT_USER_ID":
+            return ObjectId(user_id) if user_id else obj
+        elif obj == "USER_COMPANY_ID":
+            return ObjectId(user_company) if user_company else obj
+        else:
+            return obj
+
 # Define ObjectId fields for each collection
 OBJECTID_FIELDS = {
     "leads": ["_id", "bhk", "bhkType", "broker", "company", "project"],
@@ -53,7 +73,13 @@ OBJECTID_FIELDS = {
     "lead-notes": ["_id", "company", "lead", "tag"],
     "lead-rotations": ["_id", "assignee", "company", "lead", "team"],
     "lead-visited-properties": ["_id", "company", "lead", "property"],
-    "users": ["_id", "company", "designation", "groups[]"]
+    "users": ["_id", "company", "designation", "groups[]"],
+    "companies": ["_id", "country", "plan", "superAdmin"],
+    "properties": ["_id", "bhk", "bhkType", "company", "project", "propertyUnitSubType"],
+    "projects": ["_id", "company", "land", "category", "country"],
+    "brokers": ["_id", "company", "country"],
+    "tenants": ["_id", "company", "project", "property"],
+    "rent-payments": ["_id", "company", "project", "property", "tenant"]
 }
 
 # Database Schema Knowledge
@@ -96,14 +122,12 @@ class MongoDBQueryInput(BaseModel):
     projection: Optional[str] = Field(description="Projection fields", default=None)
     limit: Optional[int] = Field(description="Limit number of results", default=None)
 
-
 class MongoDBQueryTool(BaseTool):
     name: str = "mongodb_query"
     description: str = "Execute simple MongoDB queries for basic lookups with read permission checks."
     args_schema: Type[BaseModel] = MongoDBQueryInput
 
     def _run(self, *args, **kwargs) -> str:
-        # Synchronous method not supported
         return "This tool only supports async operations"
 
     async def _arun(
@@ -118,11 +142,11 @@ class MongoDBQueryTool(BaseTool):
         try:
             global current_user_context
 
-            # Defensive fetch of user_id from context if not provided
+            # Get user_id from context if not provided
             if not user_id:
                 user_id = current_user_context.get("user_id")
 
-            # Validate user_id early
+            # Validate user_id
             if not user_id or not isinstance(user_id, str) or not ObjectId.is_valid(user_id):
                 return {
                     "status": "error",
@@ -131,13 +155,14 @@ class MongoDBQueryTool(BaseTool):
                 }
             user_obj_id = ObjectId(user_id)
 
+            # Parse query parameters
             collection_name = collection
             mongo_query = {}
             count_flag = count
             limit_val = limit
             projection_dict = None
 
-            # Parse query string JSON if possible
+            # Parse JSON query if provided
             if isinstance(query, str):
                 try:
                     query_data = json.loads(query)
@@ -147,7 +172,6 @@ class MongoDBQueryTool(BaseTool):
                     count_flag = query_data.get("count", False) or count_flag
                     proj_raw = query_data.get("projection") or projection
                     if proj_raw:
-                        # Parse projection JSON if string
                         if isinstance(proj_raw, str):
                             try:
                                 projection_dict = json.loads(proj_raw)
@@ -159,23 +183,13 @@ class MongoDBQueryTool(BaseTool):
                                 }
                         elif isinstance(proj_raw, dict):
                             projection_dict = proj_raw
-                        else:
-                            projection_dict = None
-                    else:
-                        projection_dict = None
-                    # Allow user_id override from query if present and valid
                     q_user_id = query_data.get("user_id")
                     if q_user_id and isinstance(q_user_id, str) and ObjectId.is_valid(q_user_id):
                         user_obj_id = ObjectId(q_user_id)
                         user_id = q_user_id
                 except json.JSONDecodeError:
-                    # If not valid JSON, treat as collection name if missing
                     if not collection_name:
                         collection_name = query
-                    mongo_query = {}
-            else:
-                collection_name = collection or collection_name
-                mongo_query = {}
 
             if not collection_name:
                 return {
@@ -184,6 +198,7 @@ class MongoDBQueryTool(BaseTool):
                     "message": "Collection name is required."
                 }
 
+            # Check if collection exists
             existing_collections = await db.list_collection_names()
             if collection_name not in existing_collections:
                 return {
@@ -192,11 +207,7 @@ class MongoDBQueryTool(BaseTool):
                     "message": f"Collection '{collection_name}' does not exist."
                 }
 
-            # Convert ObjectId fields in query safely
-            if collection_name in OBJECTID_FIELDS:
-                mongo_query = convert_to_objectids(mongo_query, OBJECTID_FIELDS[collection_name])
-
-            # Fetch user document to get permissions safely
+            # Fetch user document to get company ID
             user = await db.users.find_one({"_id": user_obj_id})
             if not user:
                 return {
@@ -205,16 +216,27 @@ class MongoDBQueryTool(BaseTool):
                     "message": f"User with ID {user_id} not found."
                 }
 
+            # Get company ID from user document
+            user_company = user.get("company")
+            if user_company and not isinstance(user_company, ObjectId):
+                user_company = ObjectId(user_company)
+
+            # Replace placeholders in query using fetched company ID
+            mongo_query = replace_placeholders_recursively(mongo_query, user_id, user_company)
+
+            # Convert ObjectId fields AFTER placeholder replacement
+            if collection_name in OBJECTID_FIELDS:
+                mongo_query = convert_to_objectids(mongo_query, OBJECTID_FIELDS[collection_name])
+
+            # Permission and filtering logic
             account_type = user.get("account_type", "")
             user_permissions = user.get("permissions", {})
-
             is_super_admin = account_type == "company_super_admin"
-            is_sub_admin = account_type == "company_sub_admin"
-
-            perms = user_permissions.get(collection_name, {})
-            has_read_permission = perms and ("read" in perms)
 
             # Permission check
+            perms = user_permissions.get(collection_name, {})
+            has_read_permission = perms and ("read" in perms)
+            
             if not is_super_admin and not has_read_permission:
                 return {
                     "status": "error",
@@ -222,33 +244,23 @@ class MongoDBQueryTool(BaseTool):
                     "message": f"You do not have read permission on the collection '{collection_name}'."
                 }
 
-            # Apply filtering for company_sub_admin
-            if is_sub_admin:
-                user_company_id = user.get("company_id")
-                if not user_company_id:
-                    return {
-                        "status": "error",
-                        "error_code": "CompanyIdMissing",
-                        "message": "Company ID missing for company_sub_admin user."
-                    }
-                company_obj_id = (
-                    ObjectId(user_company_id) if isinstance(user_company_id, str) else user_company_id
-                )
-                if "company_id" not in mongo_query:
-                    mongo_query["company_id"] = company_obj_id
+            # Apply company filtering for sub-admins
+            if account_type == "company_sub_admin" and user_company:
+                if "company" not in mongo_query:
+                    mongo_query["company"] = user_company
                 else:
-                    requested_company = mongo_query.get("company_id")
+                    requested_company = mongo_query.get("company")
                     if isinstance(requested_company, str) and ObjectId.is_valid(requested_company):
                         requested_company = ObjectId(requested_company)
-                        mongo_query["company_id"] = requested_company
-                    if requested_company != company_obj_id:
+                        mongo_query["company"] = requested_company
+                    if requested_company != user_company:
                         return {
                             "status": "error",
                             "error_code": "PermissionDenied",
                             "message": "Access denied to company data outside your assigned company.",
                         }
 
-            # For users collection, user can only query own document
+            # Special handling for users collection
             if collection_name == "users":
                 mongo_query = {"_id": user_obj_id}
 
@@ -264,7 +276,7 @@ class MongoDBQueryTool(BaseTool):
             # Apply default projections if none specified
             if not projection_dict:
                 if collection_name == "leads":
-                    projection_dict = {"name": 1, "email": 1, "phone": 1, "status": 1, "_id": 0}
+                    projection_dict = {"name": 1, "email": 1, "phone": 1, "leadStatus": 1, "_id": 0}
                 elif collection_name == "users":
                     projection_dict = {"name": 1, "email": 1, "_id": 0}
                 elif collection_name == "companies":
@@ -303,7 +315,6 @@ class MongoDBQueryTool(BaseTool):
                 "message": "Invalid JSON format in input query or projection.",
             }
         except Exception as e:
-            # Optionally log 'e' internally for debugging
             return {
                 "status": "error",
                 "error_code": "ExecutionError",
@@ -322,22 +333,20 @@ class MongoDBAggregationTool(BaseTool):
     args_schema: Type[BaseModel] = MongoDBAggregationInput
 
     def _run(self, pipeline: str, user_id: Optional[str] = None) -> str:
-        # Synchronous version - not used but required
         return "This tool only supports async operations"
 
     async def _arun(self, pipeline: str, user_id: Optional[str] = None, collection: Optional[str] = None, stages: Optional[str] = None) -> str:
         try:
-            # Get user_id from global context if not provided
             global current_user_context
             if not user_id:
                 user_id = current_user_context.get("user_id")
             
-            # Parse the aggregation pipeline if it's a string, otherwise use direct parameters
+            # Parse the aggregation pipeline
             if isinstance(pipeline, str):
                 try:
                     pipeline_data = json.loads(pipeline)
                     collection_name = pipeline_data.get("collection") or collection
-                    stages = pipeline_data.get("stages", []) 
+                    stages = pipeline_data.get("pipeline", []) or pipeline_data.get("stages", [])
                     if isinstance(stages, str):
                         try:
                             stages = json.loads(stages)
@@ -347,7 +356,6 @@ class MongoDBAggregationTool(BaseTool):
                         stages = []
                     user_id = pipeline_data.get("user_id") or user_id
                 except json.JSONDecodeError:
-                    # If not JSON, treat as collection name
                     collection_name = pipeline
                     stages = []
             else:
@@ -364,90 +372,66 @@ class MongoDBAggregationTool(BaseTool):
             if not collection_name:
                 return "Error: collection name is required"
             
-            collection = db[collection_name]
-            
-            # Convert ObjectIds in aggregation stages
-            if collection_name in OBJECTID_FIELDS:
-                for stage in stages:
-                    if isinstance(stage, dict):
-                        for stage_type, stage_data in stage.items():
-                            if isinstance(stage_data, dict):
-                                stage[stage_type] = convert_to_objectids(stage_data, OBJECTID_FIELDS[collection_name])
-            
-            # Apply user-based filtering if user_id is provided
+            # Fetch user document to get company ID
             if user_id:
-                try:
-                    # Get user details and permissions - use _id for users collection
-                    user = await db.users.find_one({"_id": ObjectId(user_id)})
-                    if not user:
-                        return f"Error: User with ID {user_id} not found"
-                    
-                    user_permissions = user.get("permissions", {})
-                    
-                    # Check if user is super admin - use _id for companies collection
-                    is_super_admin = await db.companies.find_one({"superAdmin": ObjectId(user_id)})
-                    
-                    # Apply user ID-based filtering for non-super admins
-                    if not is_super_admin:
-                        # Replace placeholders with actual user ID
-                        def replace_placeholders(stages_list):
-                            for stage in stages_list:
-                                if isinstance(stage, dict):
-                                    for stage_type, stage_data in stage.items():
-                                        if isinstance(stage_data, dict):
-                                            # Replace CURRENT_USER_ID in $match stages
-                                            if stage_type == "$match":
-                                                for field, value in stage_data.items():
-                                                    if value == "CURRENT_USER_ID":
-                                                        stage_data[field] = ObjectId(user_id)
-                                            # Recursively check nested stages
-                                            replace_placeholders([stage_data])
-                        
-                        replace_placeholders(stages)
-                        
-                        # Add user-specific filters if not already present
-                        has_user_filter = any(
-                            isinstance(stage, dict) and "$match" in stage and 
-                            any(field in stage.get("$match", {}) for field in ["_id", "assignedTo", "assignee"])
-                            for stage in stages
-                        )
-                        
-                        if not has_user_filter:
-                            # Add appropriate filter based on collection
-                            if collection_name == "users":
-                                user_filter = {"$match": {"_id": ObjectId(user_id)}}
-                            elif collection_name in ["leads", "lead-assignments"]:
-                                user_filter = {"$match": {"assignedTo": ObjectId(user_id)}}
-                            else:
-                                user_filter = {"$match": {"_id": ObjectId(user_id)}}
-                            stages.insert(0, user_filter)
-                    
-                    # Apply permission-based filtering
-                    if not is_super_admin:
-                        # Permission check (dictionary-based)
-                        collection_perms = user_permissions.get(collection_name) or user_permissions.get(f"permissions.{collection_name}")
-                        has_permission = False
-                        if collection_perms:
-                            if "read" in collection_perms or "write" in collection_perms:
-                                has_permission = True
-                        if "Company super admin" in user_permissions or "super_adminw" in user_permissions:
-                            has_permission = True
-
-                        if not has_permission:
-                            return f"Error: You don't have permission to access {collection_name}. Your permissions: {user_permissions}"
-
+                user = await db.users.find_one({"_id": ObjectId(user_id)})
+                if not user:
+                    return f"Error: User with ID {user_id} not found"
                 
-                except Exception as e:
-                    return f"Error applying user filtering: {str(e)}"
+                # Get company ID from user document
+                user_company = user.get("company")
+                if user_company and not isinstance(user_company, ObjectId):
+                    user_company = ObjectId(user_company)
+                
+                account_type = user.get("account_type", "")
+                user_permissions = user.get("permissions", {})
+                is_super_admin = account_type == "company_super_admin"
+                
+                # Replace placeholders in the entire pipeline using fetched company ID
+                stages = replace_placeholders_recursively(stages, user_id, user_company)
+                
+                # Apply company filtering for non-super admins
+                if not is_super_admin and user_company:
+                    has_user_filter = any(
+                        isinstance(stage, dict) and "$match" in stage and 
+                        any(field in stage.get("$match", {}) for field in ["_id", "assignedTo", "assignee", "company"])
+                        for stage in stages
+                    )
+                    
+                    if not has_user_filter:
+                        if collection_name == "users":
+                            user_filter = {"$match": {"_id": ObjectId(user_id)}}
+                        elif collection_name in ["leads", "lead-assignments", "lead-rotations"]:
+                            user_filter = {"$match": {"assignedTo": ObjectId(user_id)}}
+                        else:
+                            user_filter = {"$match": {"company": user_company}}
+                        stages.insert(0, user_filter)
+                
+                # Permission check
+                collection_perms = user_permissions.get(collection_name, {})
+                has_permission = (
+                    "read" in collection_perms or 
+                    "write" in collection_perms or 
+                    is_super_admin
+                )
+                
+                if not has_permission:
+                    return f"Error: You don't have permission to access {collection_name}."
             
-            # Execute aggregation /
+            # Convert ObjectIds AFTER placeholder replacement
+            if collection_name in OBJECTID_FIELDS:
+                for i, stage in enumerate(stages):
+                    if isinstance(stage, dict):
+                        stages[i] = convert_to_objectids(stage, OBJECTID_FIELDS[collection_name])
+            
+            # Execute aggregation
+            collection = db[collection_name]
             cursor = collection.aggregate(stages)
-            results = await cursor.to_list(length=100)  # Limit aggregation results
+            results = await cursor.to_list(length=100)
             
             if not results:
                 return f"No results found for aggregation on {collection_name}."
             
-            # Format results in a user-friendly way
             if len(results) == 1:
                 return f"Aggregation result: {json.dumps(results[0], default=str, indent=2)}"
             else:
@@ -469,27 +453,37 @@ class MongoDBGetUserPermissionsTool(BaseTool):
     def _run(self, user_id: str) -> str:
         return "This tool only supports async operations"
 
-    async def _arun(self, user_id: str) -> str:
+    async def _arun(self, user_id: Optional[str] = None) -> str:
         try:
             global current_user_context
+            
+            # Fix: Properly get user_id from context if not provided
             if not user_id:
                 user_id = current_user_context.get("user_id")
                 if not user_id:
                     return "Error: No user_id provided"
+            
+            # Fix: Validate user_id before creating ObjectId
+            if not isinstance(user_id, str) or not ObjectId.is_valid(user_id):
+                return f"Error: Invalid user_id format: {user_id}"
             
             # Get user details
             user = await db.users.find_one({"_id": ObjectId(user_id)})
             if not user:
                 return f"Error: User with ID {user_id} not found"
             
-            permissions = user.get("permissions", [])
-            is_super_admin = "super_admin" in permissions or "admin" in permissions
+            permissions = user.get("permissions", {})
+            account_type = user.get("account_type", "")
+            is_super_admin = account_type == "company_super_admin"
+            company = user.get("company")
             
             result = {
                 "user_id": user_id,
                 "user_name": user.get("name"),
                 "user_email": user.get("email"),
+                "account_type": account_type,
                 "is_super_admin": is_super_admin,
+                "company": str(company) if company else None,
                 "permissions": permissions
             }
             
@@ -507,7 +501,6 @@ class MongoDBListCollectionsTool(BaseTool):
     args_schema: Type[BaseModel] = MongoDBListCollectionsInput
 
     def _run(self, dummy: str) -> str:
-        # Synchronous version - not used but required
         return "This tool only supports async operations"
 
     async def _arun(self, dummy: str) -> str:
@@ -526,16 +519,13 @@ class MongoDBGetSchemaTool(BaseTool):
     args_schema: Type[BaseModel] = MongoDBGetSchemaInput
 
     def _run(self, collection: str) -> str:
-        # Synchronous version - not used but required
         return "This tool only supports async operations"
 
     async def _arun(self, collection: str) -> str:
         try:
             coll = db[collection]
-            # Get one document to understand the schema
             sample = await coll.find_one()
             if sample:
-                # Show only key fields for better readability
                 key_fields = {k: v for k, v in sample.items() if k in ['name', 'email', 'phone', 'status', 'amount', 'clientName']}
                 return f"Key fields in {collection}: {json.dumps(key_fields, default=str)}"
             else:
@@ -552,7 +542,6 @@ class MongoDBGetSchemaKnowledgeTool(BaseTool):
     args_schema: Type[BaseModel] = MongoDBGetSchemaKnowledgeInput
 
     def _run(self, dummy: str) -> str:
-        # Synchronous version - not used but required
         return "This tool only supports async operations"
 
     async def _arun(self, dummy: str) -> str:
@@ -575,7 +564,7 @@ Use EXACT format ALWAYS. If insufficient info: "Thought: Insufficient informatio
 
 Question: {input}
 Thought: Step-by-step reasoning. Verify schema/knowledge. No assumptions. Dynamically adapt queries/aggregations from schema fields and relationships.
-Action : One of [{tool_names}]. mongodb_aggregation for complex; mongodb_query for simple lookups.
+Action: One of [{tool_names}]. mongodb_aggregation for complex; mongodb_query for simple lookups.
 Action Input: Valid JSON using ONLY schema fields/relationships.
 Observation: Result
 ... (Max 3 repeats. Use {agent_scratchpad}.)
@@ -594,7 +583,35 @@ GUIDELINES:
 9. No hallucinations; note missing fields in Thought.
 10. Replace placeholders if provided; else stop.
 
-SCHEMA KNOWLEDGE: {{SCHEMA_KNOWLEDGE}}
+SCHEMA KNOWLEDGE:
+Relevant Collections and Fields:
+leads: ["_id", "bhk", "bhkType", "broker", "buyingTimeline", "commissionPercent", "company", "createdAt", "email", "leadStatus", "maxBudget", "minBudget", "name", "phone", "project", "propertyType", "rotationCount", "secondaryPhone", "sourceType", "status", "updatedAt"]
+lead-assignments: ["_id", "assignee", "company", "createdAt", "defaultPrimary", "defaultSecondary", "lead", "status", "team", "updatedAt"]
+lead-notes: ["_id", "company", "lead", "communicationType", "meetingDateTime", "nextSiteVisitScheduledDate", "remarks", "siteVisitScheduledDate", "siteVisitStatus", "status", "tag", "updatedAt"]
+lead-rotations: ["_id", "assignee", "company", "createdAt", "date", "lead", "team", "updatedAt"]
+lead-visited-properties: ["_id", "company", "createdAt", "lead", "property", "remarks", "status", "updatedAt"]
+users: ["_id", "company", "designation", "email", "name", "phone", "groups[]", "status", "updatedAt"]
+
+Relationships:
+- lead-assignments: lead -> leads._id, assignee -> users._id, team -> teams._id
+- lead-notes: lead -> leads._id, tag -> tags._id
+- lead-rotations: lead -> leads._id, assignee -> users._id, team -> teams._id
+- lead-visited-properties: lead -> leads._id, property -> properties._id
+
+User Filtering:
+- Only allow access to leads assigned to the current user (assignedTo/assignee).
+- For users, only allow access to own user document unless super admin.
+- Permission checks are enforced for each collection.
+
+Field Value Clarifications:
+- 'leadStatus' tracks stages such as 'New', 'In Progress', 'Closed - Won', 'Closed - Lost'.
+- 'status' field indicates general activity, e.g., 'active', 'inactive'.
+
+Example Queries:
+- "Show my assigned leads": Query lead-assignments where assignee = CURRENT_USER_ID, lookup leads.
+- "Show notes for a lead": Query lead-notes where lead = lead_id.
+- "Show properties visited by a lead": Query lead-visited-properties where lead = lead_id.
+- "Show my lead rotations": Query lead-rotations where assignee = CURRENT_USER_ID.
 
 USER FILTERING:
 - Dynamically filter by CURRENT_USER_ID/company via schema relationships ONLY.
@@ -624,7 +641,10 @@ class CustomAgentExecutor(AgentExecutor):
     async def ainvoke(self, inputs, config=None):
         # Extract user_id from inputs and store it globally
         global current_user_context
-        current_user_context["user_id"] = inputs.get("user_id")
+        user_id = inputs.get("user_id")
+        current_user_context["user_id"] = user_id
+        if user_id:
+            print(f"Debug: Set current_user_context to {user_id}")  # Debug line
         return await super().ainvoke(inputs, config)
 
 agent_executor = CustomAgentExecutor.from_agent_and_tools(
