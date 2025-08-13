@@ -1376,6 +1376,7 @@ dependencies = [
     { name = "pymongo" },
     { name = "python-dotenv" },
     { name = "python-socketio", extra = ["asyncio-client"] },
+    { name = "requests" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "websockets" },
 ]
@@ -1396,6 +1397,7 @@ requires-dist = [
     { name = "pymongo", specifier = "<4.9" },
     { name = "python-dotenv", specifier = "==1.0.0" },
     { name = "python-socketio", extras = ["asyncio-client"], specifier = "==5.9.0" },
+    { name = "requests", specifier = ">=2.32.4" },
     { name = "uvicorn", extras = ["standard"], specifier = "==0.24.0" },
     { name = "websockets", specifier = ">=14.2" },
 ]

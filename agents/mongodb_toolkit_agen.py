@@ -1,5 +1,15 @@
 import os
 import json
+import re
+import time
+import threading
+import asyncio
+import logging
+from datetime import datetime, timedelta
+from contextlib import contextmanager
+from functools import lru_cache
+from typing import Optional, Type, Any, Dict
+
 import google.generativeai as genai
 from config import settings
 from database import db
@@ -7,9 +17,13 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents import AgentExecutor, create_react_agent
 from langchain.prompts import PromptTemplate
 from langchain.tools import BaseTool
-from typing import Optional, Type, Any, Dict
 from pydantic import BaseModel, Field
 from bson import ObjectId
+
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Configure Google Gemini API key
 genai.configure(api_key=settings.gemini_api_key)
@@ -21,28 +35,29 @@ llm = ChatGoogleGenerativeAI(
     temperature=0.0
 )
 
+
 def convert_to_objectids(query_dict: Dict[str, Any], objectid_fields: list) -> Dict[str, Any]:
     """
-    Recursively convert string values to ObjectIds for specified fields
+    Recursively convert string values to ObjectIds for specified fields with validation
     """
     result = {}
     for key, value in query_dict.items():
         if key in objectid_fields and isinstance(value, str):
-            try:
-                result[key] = ObjectId(value)
-            except Exception:
-                # If conversion fails, keep as string
-                result[key] = value
+            if not ObjectId.is_valid(value):
+                raise ValueError(f"Invalid ObjectId format for field '{key}': {value}")
+            result[key] = ObjectId(value)
         elif isinstance(value, dict):
             result[key] = convert_to_objectids(value, objectid_fields)
         elif isinstance(value, list):
             result[key] = [
-                convert_to_objectids(item, objectid_fields) if isinstance(item, dict) else item
+                convert_to_objectids(item, objectid_fields) if isinstance(item, dict) 
+                else (ObjectId(item) if key in objectid_fields and isinstance(item, str) and ObjectId.is_valid(item) else item)
                 for item in value
             ]
         else:
             result[key] = value
     return result
+
 
 def replace_placeholders_recursively(obj, user_id, user_company):
     """Recursively replace placeholders in any nested structure"""
@@ -66,6 +81,20 @@ def replace_placeholders_recursively(obj, user_id, user_company):
         else:
             return obj
 
+
+def validate_user_input(user_input: str) -> bool:
+    """Validate user input for potential injection attacks"""
+    dangerous_patterns = [
+        r'\$where', r'javascript:', r'eval\s*\(', r'function\s*\(',
+        r'this\.', r'db\.', r'load\s*\(', r'sleep\s*\('
+    ]
+    
+    for pattern in dangerous_patterns:
+        if re.search(pattern, user_input, re.IGNORECASE):
+            return False
+    return True
+
+
 # Define ObjectId fields for each collection
 OBJECTID_FIELDS = {
     "leads": ["_id", "bhk", "bhkType", "broker", "company", "project"],
@@ -81,6 +110,7 @@ OBJECTID_FIELDS = {
     "tenants": ["_id", "company", "project", "property"],
     "rent-payments": ["_id", "company", "project", "property", "tenant"]
 }
+
 
 # Database Schema Knowledge
 SCHEMA_KNOWLEDGE = """
@@ -114,6 +144,112 @@ Example Queries:
 - "Show my lead rotations": Query lead-rotations where assignee = CURRENT_USER_ID.
 """
 
+
+class UserContextManager:
+    def __init__(self):
+        self._cache = {}
+        self._cache_ttl = 300  # 5 minutes
+        self._lock = asyncio.Lock()
+    
+    async def get_user_context(self, user_id: str) -> dict:
+        async with self._lock:
+            cache_key = f"user_{user_id}"
+            current_time = datetime.now()
+            
+            # Check cache first
+            if cache_key in self._cache:
+                cached_data, timestamp = self._cache[cache_key]
+                if current_time - timestamp < timedelta(seconds=self._cache_ttl):
+                    return cached_data
+            
+            # Fetch from database
+            try:
+                user = await db.users.find_one({"_id": ObjectId(user_id)})
+                if not user:
+                    raise ValueError(f"User {user_id} not found")
+                
+                context = {
+                    "user_id": user_id,
+                    "company_id": user.get("company"),
+                    "account_type": user.get("account_type", ""),
+                    "permissions": user.get("permissions", {}),
+                    "is_super_admin": user.get("account_type") == "company_super_admin",
+                    "user_name": user.get("name"),
+                    "user_email": user.get("email")
+                }
+                
+                # Cache the result
+                self._cache[cache_key] = (context, current_time)
+                return context
+                
+            except Exception as e:
+                raise ValueError(f"Failed to fetch user context: {str(e)}")
+    
+    def clear_cache(self, user_id: str = None):
+        if user_id:
+            cache_key = f"user_{user_id}"
+            self._cache.pop(cache_key, None)
+        else:
+            self._cache.clear()
+
+
+class QueryLogger:
+    @staticmethod
+    def log_query(user_id: str, collection: str, query_type: str, 
+                  execution_time: float, result_count: int):
+        logger.info(f"Query executed - User: {user_id}, Collection: {collection}, "
+                   f"Type: {query_type}, Time: {execution_time:.2f}s, Results: {result_count}")
+    
+    @staticmethod
+    def log_error(user_id: str, error: str, query: str):
+        logger.error(f"Query error - User: {user_id}, Error: {error}, Query: {query[:100]}...")
+
+
+# Global context manager
+user_context_manager = UserContextManager()
+
+
+class BaseMongoDBTool(BaseTool):
+    async def get_user_context(self, user_id: str = None) -> dict:
+        if not user_id:
+            raise ValueError("User ID is required")
+        return await user_context_manager.get_user_context(user_id)
+    
+    def validate_permissions(self, user_context: dict, collection: str, operation: str = "read") -> bool:
+        if user_context["is_super_admin"]:
+            return True
+        
+        collection_perms = user_context["permissions"].get(collection, {})
+        return operation in collection_perms
+    
+    def apply_company_filter(self, query: dict, user_context: dict, collection: str) -> dict:
+        if user_context["is_super_admin"]:
+            return query
+        
+        company_id = user_context["company_id"]
+        if not company_id:
+            return query
+        
+        # Special handling for different collections
+        if collection == "users":
+            return {"_id": ObjectId(user_context["user_id"])}
+        elif collection in ["lead-assignments", "lead-rotations"]:
+            if "assignee" not in query:
+                query["assignee"] = ObjectId(user_context["user_id"])
+        elif "company" not in query:
+            query["company"] = ObjectId(company_id)
+        
+        return query
+    
+    def _error_response(self, error_code: str, message: str) -> dict:
+        return {
+            "status": "error",
+            "error_code": error_code,
+            "message": message
+        }
+
+
+# Pydantic Models
 class MongoDBQueryInput(BaseModel):
     query: str = Field(description="The MongoDB query in JSON format")
     user_id: Optional[str] = Field(description="User ID for permission-based filtering", default=None)
@@ -122,14 +258,15 @@ class MongoDBQueryInput(BaseModel):
     projection: Optional[str] = Field(description="Projection fields", default=None)
     limit: Optional[int] = Field(description="Limit number of results", default=None)
 
-class MongoDBQueryTool(BaseTool):
-    name: str = "mongodb_query"
-    description: str = "Execute simple MongoDB queries for basic lookups with read permission checks."
-    args_schema: Type[BaseModel] = MongoDBQueryInput
 
+class EnhancedMongoDBQueryTool(BaseMongoDBTool):
+    name: str = "mongodb_query"
+    description: str = "Execute MongoDB queries with optimized permission checking and caching"
+    args_schema: Type[BaseModel] = MongoDBQueryInput
+    
     def _run(self, *args, **kwargs) -> str:
         return "This tool only supports async operations"
-
+    
     async def _arun(
         self,
         query: str,
@@ -139,187 +276,137 @@ class MongoDBQueryTool(BaseTool):
         projection: Optional[str] = None,
         limit: Optional[int] = None,
     ) -> dict:
+        start_time = time.time()
         try:
-            global current_user_context
-
-            # Get user_id from context if not provided
-            if not user_id:
-                user_id = current_user_context.get("user_id")
-
-            # Validate user_id
-            if not user_id or not isinstance(user_id, str) or not ObjectId.is_valid(user_id):
-                return {
-                    "status": "error",
-                    "error_code": "InvalidUserID",
-                    "message": f"Invalid or missing user_id: {user_id}"
-                }
-            user_obj_id = ObjectId(user_id)
-
-            # Parse query parameters
-            collection_name = collection
-            mongo_query = {}
-            count_flag = count
-            limit_val = limit
-            projection_dict = None
-
-            # Parse JSON query if provided
-            if isinstance(query, str):
-                try:
-                    query_data = json.loads(query)
-                    collection_name = query_data.get("collection") or collection_name
-                    mongo_query = query_data.get("query", {})
-                    limit_val = query_data.get("limit") or limit_val
-                    count_flag = query_data.get("count", False) or count_flag
-                    proj_raw = query_data.get("projection") or projection
-                    if proj_raw:
-                        if isinstance(proj_raw, str):
-                            try:
-                                projection_dict = json.loads(proj_raw)
-                            except json.JSONDecodeError:
-                                return {
-                                    "status": "error",
-                                    "error_code": "InvalidProjection",
-                                    "message": "Projection is not valid JSON."
-                                }
-                        elif isinstance(proj_raw, dict):
-                            projection_dict = proj_raw
-                    q_user_id = query_data.get("user_id")
-                    if q_user_id and isinstance(q_user_id, str) and ObjectId.is_valid(q_user_id):
-                        user_obj_id = ObjectId(q_user_id)
-                        user_id = q_user_id
-                except json.JSONDecodeError:
-                    if not collection_name:
-                        collection_name = query
-
-            if not collection_name:
-                return {
-                    "status": "error",
-                    "error_code": "MissingCollection",
-                    "message": "Collection name is required."
-                }
-
-            # Check if collection exists
-            existing_collections = await db.list_collection_names()
-            if collection_name not in existing_collections:
-                return {
-                    "status": "error",
-                    "error_code": "InvalidCollection",
-                    "message": f"Collection '{collection_name}' does not exist."
-                }
-
-            # Fetch user document to get company ID
-            user = await db.users.find_one({"_id": user_obj_id})
-            if not user:
-                return {
-                    "status": "error",
-                    "error_code": "UserNotFound",
-                    "message": f"User with ID {user_id} not found."
-                }
-
-            # Get company ID from user document
-            user_company = user.get("company")
-            if user_company and not isinstance(user_company, ObjectId):
-                user_company = ObjectId(user_company)
-
-            # Replace placeholders in query using fetched company ID
-            mongo_query = replace_placeholders_recursively(mongo_query, user_id, user_company)
-
-            # Convert ObjectId fields AFTER placeholder replacement
-            if collection_name in OBJECTID_FIELDS:
-                mongo_query = convert_to_objectids(mongo_query, OBJECTID_FIELDS[collection_name])
-
-            # Permission and filtering logic
-            account_type = user.get("account_type", "")
-            user_permissions = user.get("permissions", {})
-            is_super_admin = account_type == "company_super_admin"
-
-            # Permission check
-            perms = user_permissions.get(collection_name, {})
-            has_read_permission = perms and ("read" in perms)
+            # Parse and validate inputs
+            params = await self._parse_query_params(query, collection, count, projection, limit, user_id)
             
-            if not is_super_admin and not has_read_permission:
-                return {
-                    "status": "error",
-                    "error_code": "PermissionDenied",
-                    "message": f"You do not have read permission on the collection '{collection_name}'."
-                }
-
-            # Apply company filtering for sub-admins
-            if account_type == "company_sub_admin" and user_company:
-                if "company" not in mongo_query:
-                    mongo_query["company"] = user_company
-                else:
-                    requested_company = mongo_query.get("company")
-                    if isinstance(requested_company, str) and ObjectId.is_valid(requested_company):
-                        requested_company = ObjectId(requested_company)
-                        mongo_query["company"] = requested_company
-                    if requested_company != user_company:
-                        return {
-                            "status": "error",
-                            "error_code": "PermissionDenied",
-                            "message": "Access denied to company data outside your assigned company.",
-                        }
-
-            # Special handling for users collection
-            if collection_name == "users":
-                mongo_query = {"_id": user_obj_id}
-
-            coll = db[collection_name]
-
-            if count_flag:
-                total_count = await coll.count_documents(mongo_query)
-                return {
-                    "status": "success",
-                    "count": total_count
-                }
-
-            # Apply default projections if none specified
-            if not projection_dict:
-                if collection_name == "leads":
-                    projection_dict = {"name": 1, "email": 1, "phone": 1, "leadStatus": 1, "_id": 0}
-                elif collection_name == "users":
-                    projection_dict = {"name": 1, "email": 1, "_id": 0}
-                elif collection_name == "companies":
-                    projection_dict = {"name": 1, "clientName": 1, "_id": 0}
-                elif collection_name == "properties":
-                    projection_dict = {"name": 1, "_id": 0}
-                elif collection_name == "rent-payments":
-                    projection_dict = {"amount": 1, "_id": 0}
-                else:
-                    projection_dict = {"name": 1, "_id": 0}
-
-            cursor = coll.find(mongo_query, projection_dict)
-            if limit_val:
-                cursor = cursor.limit(limit_val)
-
-            documents = await cursor.to_list(length=limit_val or 50)
-
-            if not documents:
-                return {
-                    "status": "success",
-                    "count": 0,
-                    "data": [],
-                    "message": f"No {collection_name} found matching the criteria."
-                }
-
-            return {
-                "status": "success",
-                "count": len(documents),
-                "data": documents,
-            }
-
-        except json.JSONDecodeError:
-            return {
-                "status": "error",
-                "error_code": "InvalidJSON",
-                "message": "Invalid JSON format in input query or projection.",
-            }
+            # Get user context with caching
+            user_context = await self.get_user_context(params["user_id"])
+            
+            # Validate collection exists
+            if not await self._validate_collection(params["collection"]):
+                return self._error_response("InvalidCollection", f"Collection '{params['collection']}' does not exist")
+            
+            # Check permissions
+            if not self.validate_permissions(user_context, params["collection"], "read"):
+                return self._error_response("PermissionDenied", f"No read permission for '{params['collection']}'")
+            
+            # Apply filters and execute query
+            result = await self._execute_query(params, user_context)
+            
+            # Log successful query
+            QueryLogger.log_query(
+                params["user_id"], 
+                params["collection"], 
+                "query", 
+                time.time() - start_time,
+                result.get("count", 0)
+            )
+            
+            return result
+            
+        except ValueError as e:
+            QueryLogger.log_error(user_id or "unknown", str(e), query)
+            return self._error_response("ValidationError", str(e))
         except Exception as e:
-            return {
-                "status": "error",
-                "error_code": "ExecutionError",
-                "message": "An error occurred while executing the query.",
-            }
+            QueryLogger.log_error(user_id or "unknown", str(e), query)
+            return self._error_response("ExecutionError", f"Query execution failed: {str(e)}")
+    
+    async def _parse_query_params(self, query, collection, count, projection, limit, user_id) -> dict:
+        params = {
+            "collection": collection,
+            "query": {},
+            "count": count,
+            "projection": None,
+            "limit": limit,
+            "user_id": user_id
+        }
+        
+        if isinstance(query, str):
+            try:
+                query_data = json.loads(query)
+                params.update({
+                    "collection": query_data.get("collection") or collection,
+                    "query": query_data.get("query", {}),
+                    "count": query_data.get("count", count),
+                    "limit": query_data.get("limit", limit),
+                    "user_id": query_data.get("user_id", user_id)
+                })
+                
+                proj_raw = query_data.get("projection") or projection
+                if proj_raw:
+                    params["projection"] = json.loads(proj_raw) if isinstance(proj_raw, str) else proj_raw
+                    
+            except json.JSONDecodeError:
+                if not collection:
+                    params["collection"] = query
+        
+        if not params["collection"]:
+            raise ValueError("Collection name is required")
+        if not params["user_id"]:
+            raise ValueError("User ID is required")
+            
+        return params
+    
+    async def _validate_collection(self, collection_name: str) -> bool:
+        collections = await db.list_collection_names()
+        return collection_name in collections
+    
+    async def _execute_query(self, params: dict, user_context: dict) -> dict:
+        # Process query with placeholders and ObjectIds
+        mongo_query = self._process_query(params["query"], user_context, params["collection"])
+        
+        # Apply company/user filtering
+        mongo_query = self.apply_company_filter(mongo_query, user_context, params["collection"])
+        
+        # Execute query
+        coll = db[params["collection"]]
+        
+        if params["count"]:
+            count = await coll.count_documents(mongo_query)
+            return {"status": "success", "count": count}
+        
+        # Apply default projection if needed
+        projection = params["projection"] or self._get_default_projection(params["collection"])
+        
+        cursor = coll.find(mongo_query, projection)
+        if params["limit"]:
+            cursor = cursor.limit(min(params["limit"], 100))  # Cap at 100
+        
+        documents = await cursor.to_list(length=params["limit"] or 50)
+        
+        return {
+            "status": "success",
+            "count": len(documents),
+            "data": documents,
+            "message": f"Found {len(documents)} {params['collection']}" if documents else "No documents found"
+        }
+    
+    def _process_query(self, query: dict, user_context: dict, collection: str) -> dict:
+        # Replace placeholders
+        query = replace_placeholders_recursively(
+            query, 
+            user_context["user_id"], 
+            user_context["company_id"]
+        )
+        
+        # Convert ObjectIds
+        if collection in OBJECTID_FIELDS:
+            query = convert_to_objectids(query, OBJECTID_FIELDS[collection])
+        
+        return query
+    
+    def _get_default_projection(self, collection: str) -> dict:
+        projections = {
+            "leads": {"name": 1, "email": 1, "phone": 1, "leadStatus": 1, "_id": 1},
+            "users": {"name": 1, "email": 1, "_id": 1},
+            "companies": {"name": 1, "clientName": 1, "_id": 1},
+            "properties": {"name": 1, "_id": 1},
+            "lead-assignments": {"lead": 1, "assignee": 1, "status": 1, "createdAt": 1}
+        }
+        return projections.get(collection, {"name": 1, "_id": 1})
+
 
 class MongoDBAggregationInput(BaseModel):
     pipeline: str = Field(description="The MongoDB aggregation pipeline in JSON format")
@@ -327,125 +414,128 @@ class MongoDBAggregationInput(BaseModel):
     collection: Optional[str] = Field(description="Collection name", default=None)
     stages: Optional[str] = Field(description="Aggregation stages", default=None)
 
-class MongoDBAggregationTool(BaseTool):
+
+class EnhancedMongoDBAggregationTool(BaseMongoDBTool):
     name: str = "mongodb_aggregation"
-    description: str = "Execute MongoDB aggregation pipelines for complex queries. ALWAYS include relevant fields from related collections using $lookup and $project. Use for queries like 'total tenants', 'leads by status', 'rent payments with tenant details', etc. Automatically filters by user's company."
+    description: str = "Execute MongoDB aggregation pipelines for complex queries with optimized performance"
     args_schema: Type[BaseModel] = MongoDBAggregationInput
 
     def _run(self, pipeline: str, user_id: Optional[str] = None) -> str:
         return "This tool only supports async operations"
 
-    async def _arun(self, pipeline: str, user_id: Optional[str] = None, collection: Optional[str] = None, stages: Optional[str] = None) -> str:
+    async def _arun(self, pipeline: str, user_id: Optional[str] = None, 
+                   collection: Optional[str] = None, stages: Optional[str] = None) -> str:
+        start_time = time.time()
         try:
-            global current_user_context
-            if not user_id:
-                user_id = current_user_context.get("user_id")
+            # Parse pipeline parameters
+            collection_name, parsed_stages, parsed_user_id = await self._parse_pipeline(
+                pipeline, collection, stages, user_id)
             
-            # Parse the aggregation pipeline
-            if isinstance(pipeline, str):
-                try:
-                    pipeline_data = json.loads(pipeline)
-                    collection_name = pipeline_data.get("collection") or collection
-                    stages = pipeline_data.get("pipeline", []) or pipeline_data.get("stages", [])
-                    if isinstance(stages, str):
-                        try:
-                            stages = json.loads(stages)
-                        except json.JSONDecodeError:
-                            return "Error: Invalid stages JSON"
-                    if not isinstance(stages, list):
-                        stages = []
-                    user_id = pipeline_data.get("user_id") or user_id
-                except json.JSONDecodeError:
-                    collection_name = pipeline
-                    stages = []
-            else:
-                collection_name = collection
-                stages = stages or []
-                if isinstance(stages, str):
-                    try:
-                        stages = json.loads(stages)
-                    except json.JSONDecodeError:
-                        return "Error: Invalid stages JSON"
-                if not isinstance(stages, list):
-                    stages = []
+            # Get user context
+            user_context = await self.get_user_context(parsed_user_id)
             
-            if not collection_name:
-                return "Error: collection name is required"
+            # Check permissions
+            if not self.validate_permissions(user_context, collection_name, "read"):
+                return f"Error: No read permission for '{collection_name}'"
             
-            # Fetch user document to get company ID
-            if user_id:
-                user = await db.users.find_one({"_id": ObjectId(user_id)})
-                if not user:
-                    return f"Error: User with ID {user_id} not found"
-                
-                # Get company ID from user document
-                user_company = user.get("company")
-                if user_company and not isinstance(user_company, ObjectId):
-                    user_company = ObjectId(user_company)
-                
-                account_type = user.get("account_type", "")
-                user_permissions = user.get("permissions", {})
-                is_super_admin = account_type == "company_super_admin"
-                
-                # Replace placeholders in the entire pipeline using fetched company ID
-                stages = replace_placeholders_recursively(stages, user_id, user_company)
-                
-                # Apply company filtering for non-super admins
-                if not is_super_admin and user_company:
-                    has_user_filter = any(
-                        isinstance(stage, dict) and "$match" in stage and 
-                        any(field in stage.get("$match", {}) for field in ["_id", "assignedTo", "assignee", "company"])
-                        for stage in stages
-                    )
-                    
-                    if not has_user_filter:
-                        if collection_name == "users":
-                            user_filter = {"$match": {"_id": ObjectId(user_id)}}
-                        elif collection_name in ["leads", "lead-assignments", "lead-rotations"]:
-                            user_filter = {"$match": {"assignedTo": ObjectId(user_id)}}
-                        else:
-                            user_filter = {"$match": {"company": user_company}}
-                        stages.insert(0, user_filter)
-                
-                # Permission check
-                collection_perms = user_permissions.get(collection_name, {})
-                has_permission = (
-                    "read" in collection_perms or 
-                    "write" in collection_perms or 
-                    is_super_admin
-                )
-                
-                if not has_permission:
-                    return f"Error: You don't have permission to access {collection_name}."
+            # Process and execute aggregation
+            result = await self._execute_aggregation(collection_name, parsed_stages, user_context)
             
-            # Convert ObjectIds AFTER placeholder replacement
-            if collection_name in OBJECTID_FIELDS:
-                for i, stage in enumerate(stages):
-                    if isinstance(stage, dict):
-                        stages[i] = convert_to_objectids(stage, OBJECTID_FIELDS[collection_name])
+            # Log successful aggregation
+            result_count = len(result) if isinstance(result, list) else 1
+            QueryLogger.log_query(
+                parsed_user_id, collection_name, "aggregation", 
+                time.time() - start_time, result_count)
             
-            # Execute aggregation
-            collection = db[collection_name]
-            cursor = collection.aggregate(stages)
-            results = await cursor.to_list(length=100)
+            return self._format_aggregation_result(result, collection_name)
             
-            if not results:
-                return f"No results found for aggregation on {collection_name}."
-            
-            if len(results) == 1:
-                return f"Aggregation result: {json.dumps(results[0], default=str, indent=2)}"
-            else:
-                return f"Aggregation results ({len(results)} items): {json.dumps(results, default=str, indent=2)}"
-                
-        except json.JSONDecodeError:
-            return "Error: Invalid JSON format"
         except Exception as e:
+            QueryLogger.log_error(user_id or "unknown", str(e), pipeline)
             return f"Error executing aggregation: {str(e)}"
+    
+    async def _parse_pipeline(self, pipeline, collection, stages, user_id):
+        if isinstance(pipeline, str):
+            try:
+                pipeline_data = json.loads(pipeline)
+                collection_name = pipeline_data.get("collection") or collection
+                parsed_stages = pipeline_data.get("pipeline", []) or pipeline_data.get("stages", [])
+                parsed_user_id = pipeline_data.get("user_id") or user_id
+            except json.JSONDecodeError:
+                collection_name = collection or pipeline
+                parsed_stages = []
+                parsed_user_id = user_id
+        else:
+            collection_name = collection
+            parsed_stages = json.loads(stages) if isinstance(stages, str) else (stages or [])
+            parsed_user_id = user_id
+        
+        if not collection_name:
+            raise ValueError("Collection name is required")
+        if not parsed_user_id:
+            raise ValueError("User ID is required")
+            
+        return collection_name, parsed_stages, parsed_user_id
+    
+    async def _execute_aggregation(self, collection_name: str, stages: list, user_context: dict) -> list:
+        # Replace placeholders in stages
+        stages = replace_placeholders_recursively(
+            stages, user_context["user_id"], user_context["company_id"])
+        
+        # Apply security filters
+        stages = self._apply_security_filters(stages, user_context, collection_name)
+        
+        # Convert ObjectIds
+        if collection_name in OBJECTID_FIELDS:
+            for i, stage in enumerate(stages):
+                if isinstance(stage, dict):
+                    stages[i] = convert_to_objectids(stage, OBJECTID_FIELDS[collection_name])
+        
+        # Execute aggregation
+        collection = db[collection_name]
+        cursor = collection.aggregate(stages)
+        return await cursor.to_list(length=100)
+    
+    def _apply_security_filters(self, stages: list, user_context: dict, collection_name: str) -> list:
+        if user_context["is_super_admin"]:
+            return stages
+        
+        # Check if user filter already exists
+        has_user_filter = any(
+            isinstance(stage, dict) and "$match" in stage and 
+            any(field in stage.get("$match", {}) for field in ["_id", "assignedTo", "assignee", "company"])
+            for stage in stages
+        )
+        
+        if not has_user_filter:
+            if collection_name == "users":
+                user_filter = {"$match": {"_id": ObjectId(user_context["user_id"])}}
+            elif collection_name in ["leads", "lead-assignments", "lead-rotations"]:
+                user_filter = {"$match": {"assignee": ObjectId(user_context["user_id"])}}
+            else:
+                company_id = user_context["company_id"]
+                if company_id:
+                    user_filter = {"$match": {"company": ObjectId(company_id)}}
+                else:
+                    user_filter = {"$match": {}}
+            stages.insert(0, user_filter)
+        
+        return stages
+    
+    def _format_aggregation_result(self, results: list, collection_name: str) -> str:
+        if not results:
+            return f"No results found for aggregation on {collection_name}."
+        
+        if len(results) == 1:
+            return f"Aggregation result: {json.dumps(results[0], default=str, indent=2)}"
+        else:
+            return f"Aggregation results ({len(results)} items): {json.dumps(results, default=str, indent=2)}"
+
 
 class MongoDBGetUserPermissionsInput(BaseModel):
     user_id: str = Field(description="The user ID to get permissions for")
 
-class MongoDBGetUserPermissionsTool(BaseTool):
+
+class MongoDBGetUserPermissionsTool(BaseMongoDBTool):
     name: str = "mongodb_get_user_permissions"
     description: str = "Get user permissions for filtering queries"
     args_schema: Type[BaseModel] = MongoDBGetUserPermissionsInput
@@ -455,36 +545,19 @@ class MongoDBGetUserPermissionsTool(BaseTool):
 
     async def _arun(self, user_id: Optional[str] = None) -> str:
         try:
-            global current_user_context
-            
-            # Fix: Properly get user_id from context if not provided
             if not user_id:
-                user_id = current_user_context.get("user_id")
-                if not user_id:
-                    return "Error: No user_id provided"
+                raise ValueError("User ID is required")
             
-            # Fix: Validate user_id before creating ObjectId
-            if not isinstance(user_id, str) or not ObjectId.is_valid(user_id):
-                return f"Error: Invalid user_id format: {user_id}"
-            
-            # Get user details
-            user = await db.users.find_one({"_id": ObjectId(user_id)})
-            if not user:
-                return f"Error: User with ID {user_id} not found"
-            
-            permissions = user.get("permissions", {})
-            account_type = user.get("account_type", "")
-            is_super_admin = account_type == "company_super_admin"
-            company = user.get("company")
+            user_context = await self.get_user_context(user_id)
             
             result = {
-                "user_id": user_id,
-                "user_name": user.get("name"),
-                "user_email": user.get("email"),
-                "account_type": account_type,
-                "is_super_admin": is_super_admin,
-                "company": str(company) if company else None,
-                "permissions": permissions
+                "user_id": user_context["user_id"],
+                "user_name": user_context["user_name"],
+                "user_email": user_context["user_email"],
+                "account_type": user_context["account_type"],
+                "is_super_admin": user_context["is_super_admin"],
+                "company": str(user_context["company_id"]) if user_context["company_id"] else None,
+                "permissions": user_context["permissions"]
             }
             
             return f"User permissions: {json.dumps(result, default=str, indent=2)}"
@@ -492,10 +565,12 @@ class MongoDBGetUserPermissionsTool(BaseTool):
         except Exception as e:
             return f"Error getting user permissions: {str(e)}"
 
+
 class MongoDBListCollectionsInput(BaseModel):
     dummy: str = Field(description="Dummy field, not used")
 
-class MongoDBListCollectionsTool(BaseTool):
+
+class MongoDBListCollectionsTool(BaseMongoDBTool):
     name: str = "mongodb_list_collections"
     description: str = "List all collections in the database"
     args_schema: Type[BaseModel] = MongoDBListCollectionsInput
@@ -510,10 +585,12 @@ class MongoDBListCollectionsTool(BaseTool):
         except Exception as e:
             return f"Error listing collections: {str(e)}"
 
+
 class MongoDBGetSchemaInput(BaseModel):
     collection: str = Field(description="The collection name to get schema for")
 
-class MongoDBGetSchemaTool(BaseTool):
+
+class MongoDBGetSchemaTool(BaseMongoDBTool):
     name: str = "mongodb_get_schema"
     description: str = "Get the schema of a collection by examining sample documents"
     args_schema: Type[BaseModel] = MongoDBGetSchemaInput
@@ -533,10 +610,12 @@ class MongoDBGetSchemaTool(BaseTool):
         except Exception as e:
             return f"Error getting schema: {str(e)}"
 
+
 class MongoDBGetSchemaKnowledgeInput(BaseModel):
     dummy: str = Field(description="Dummy field, not used")
 
-class MongoDBGetSchemaKnowledgeTool(BaseTool):
+
+class MongoDBGetSchemaKnowledgeTool(BaseMongoDBTool):
     name: str = "mongodb_get_schema_knowledge"
     description: str = "Get comprehensive knowledge about database schema, relationships, and query examples"
     args_schema: Type[BaseModel] = MongoDBGetSchemaKnowledgeInput
@@ -547,15 +626,17 @@ class MongoDBGetSchemaKnowledgeTool(BaseTool):
     async def _arun(self, dummy: str) -> str:
         return SCHEMA_KNOWLEDGE
 
+
 # Create tools
 tools = [
-    MongoDBQueryTool(),
-    MongoDBAggregationTool(),
+    EnhancedMongoDBQueryTool(),
+    EnhancedMongoDBAggregationTool(),
     MongoDBGetUserPermissionsTool(),
     MongoDBListCollectionsTool(),
     MongoDBGetSchemaTool(),
     MongoDBGetSchemaKnowledgeTool()
 ]
+
 
 # Create the ReAct prompt template
 react_prompt = PromptTemplate.from_template("""You are a helpful AI assistant for MongoDB queries with user-based filtering. Tools: {tools} ONLY.
@@ -584,34 +665,7 @@ GUIDELINES:
 10. Replace placeholders if provided; else stop.
 
 SCHEMA KNOWLEDGE:
-Relevant Collections and Fields:
-leads: ["_id", "bhk", "bhkType", "broker", "buyingTimeline", "commissionPercent", "company", "createdAt", "email", "leadStatus", "maxBudget", "minBudget", "name", "phone", "project", "propertyType", "rotationCount", "secondaryPhone", "sourceType", "status", "updatedAt"]
-lead-assignments: ["_id", "assignee", "company", "createdAt", "defaultPrimary", "defaultSecondary", "lead", "status", "team", "updatedAt"]
-lead-notes: ["_id", "company", "lead", "communicationType", "meetingDateTime", "nextSiteVisitScheduledDate", "remarks", "siteVisitScheduledDate", "siteVisitStatus", "status", "tag", "updatedAt"]
-lead-rotations: ["_id", "assignee", "company", "createdAt", "date", "lead", "team", "updatedAt"]
-lead-visited-properties: ["_id", "company", "createdAt", "lead", "property", "remarks", "status", "updatedAt"]
-users: ["_id", "company", "designation", "email", "name", "phone", "groups[]", "status", "updatedAt"]
-
-Relationships:
-- lead-assignments: lead -> leads._id, assignee -> users._id, team -> teams._id
-- lead-notes: lead -> leads._id, tag -> tags._id
-- lead-rotations: lead -> leads._id, assignee -> users._id, team -> teams._id
-- lead-visited-properties: lead -> leads._id, property -> properties._id
-
-User Filtering:
-- Only allow access to leads assigned to the current user (assignedTo/assignee).
-- For users, only allow access to own user document unless super admin.
-- Permission checks are enforced for each collection.
-
-Field Value Clarifications:
-- 'leadStatus' tracks stages such as 'New', 'In Progress', 'Closed - Won', 'Closed - Lost'.
-- 'status' field indicates general activity, e.g., 'active', 'inactive'.
-
-Example Queries:
-- "Show my assigned leads": Query lead-assignments where assignee = CURRENT_USER_ID, lookup leads.
-- "Show notes for a lead": Query lead-notes where lead = lead_id.
-- "Show properties visited by a lead": Query lead-visited-properties where lead = lead_id.
-- "Show my lead rotations": Query lead-rotations where assignee = CURRENT_USER_ID.
+{schema_knowledge}
 
 USER FILTERING:
 - Dynamically filter by CURRENT_USER_ID/company via schema relationships ONLY.
@@ -625,31 +679,164 @@ EXAMPLES (For guidance; adapt dynamically to schema):
 - Assigned leads: Aggregate leads, match assignedTo = CURRENT_USER_ID, lookup users if needed, project name/status.
 
 Scratchpad: {agent_scratchpad}
-""")
+""").partial(schema_knowledge=SCHEMA_KNOWLEDGE)
+
 
 # Create ReAct agent with the prompt
 agent = create_react_agent(llm=llm, tools=tools, prompt=react_prompt)
 
-# Global context to store current user_id
-current_user_context = {"user_id": None}
 
-# Create custom agent executor that automatically passes user_id to tools
-class CustomAgentExecutor(AgentExecutor):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+class OptimizedAgentExecutor:
+    def __init__(self, agent_executor):
+        self.agent_executor = agent_executor
+        self.current_user_id = None
     
     async def ainvoke(self, inputs, config=None):
-        # Extract user_id from inputs and store it globally
-        global current_user_context
-        user_id = inputs.get("user_id")
-        current_user_context["user_id"] = user_id
-        if user_id:
-            print(f"Debug: Set current_user_context to {user_id}")  # Debug line
-        return await super().ainvoke(inputs, config)
+        # Set user context for this request
+        self.current_user_id = inputs.get("user_id")
+        
+        if not self.current_user_id:
+            return {
+                "output": "Error: user_id is required for all queries",
+                "status": "error"
+            }
+        
+        # Validate user input for security
+        user_input = inputs.get("input", "")
+        if not validate_user_input(user_input):
+            return {
+                "output": "Error: Invalid input detected. Please avoid using potentially dangerous patterns.",
+                "status": "error"
+            }
+        
+        try:
+            # Pre-validate user exists and cache context
+            await user_context_manager.get_user_context(self.current_user_id)
+            
+            # Add user_id to all tool calls automatically
+            enhanced_inputs = {**inputs, "user_id": self.current_user_id}
+            
+            result = await self.agent_executor.ainvoke(enhanced_inputs, config)
+            return result
+            
+        except ValueError as e:
+            return {
+                "output": f"Authentication error: {str(e)}",
+                "status": "error"
+            }
+        except Exception as e:
+            return {
+                "output": f"Execution error: {str(e)}",
+                "status": "error"
+            }
 
-agent_executor = CustomAgentExecutor.from_agent_and_tools(
+# Then update the initialization:
+base_agent_executor = AgentExecutor.from_agent_and_tools(
     agent=agent,
     tools=tools,
     verbose=True,
-    handle_parsing_errors=True
+    handle_parsing_errors=True,
+    max_iterations=3,
+    early_stopping_method="generate"
 )
+
+# Wrap it with our custom executor
+agent_executor = OptimizedAgentExecutor(base_agent_executor)
+
+
+async def process_chatbot_query(user_message: str, user_id: str) -> dict:
+    """
+    Process a chatbot query with proper error handling and validation
+    """
+    try:
+        # Validate inputs
+        if not user_message or not user_id:
+            return {
+                "status": "error",
+                "message": "Both user_message and user_id are required"
+            }
+        
+        if not ObjectId.is_valid(user_id):
+            return {
+                "status": "error", 
+                "message": "Invalid user_id format"
+            }
+        
+        # Execute query
+        result = await agent_executor.ainvoke({
+            "input": user_message,
+            "user_id": user_id
+        })
+        
+        return {
+            "status": "success",
+            "response": result.get("output", ""),
+            "intermediate_steps": result.get("intermediate_steps", [])
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Query processing failed: {str(e)}"
+        }
+
+
+# Usage example and testing functions
+async def test_chatbot():
+    """Test function for the chatbot"""
+    user_id = "67ee232ca893aaad92fe7214"  # Replace with actual user ID
+    
+    queries = [
+        "Show me my assigned leads",
+        "How many leads do I have?", 
+        "Show my lead notes from this week",
+        "What are my permissions?",
+        "List all available collections"
+    ]
+    
+    for query in queries:
+        print(f"\n🤖 Processing: {query}")
+        result = await process_chatbot_query(query, user_id)
+        
+        if result["status"] == "success":
+            print(f"✅ Response: {result['response']}")
+        else:
+            print(f"❌ Error: {result['message']}")
+
+
+# FastAPI integration example
+def create_chatbot_endpoint():
+    """Example FastAPI endpoint integration"""
+    from fastapi import FastAPI, HTTPException
+    from pydantic import BaseModel
+    
+    app = FastAPI(title="MongoDB Chatbot API")
+    
+    class ChatRequest(BaseModel):
+        message: str
+        user_id: str
+    
+    class ChatResponse(BaseModel):
+        status: str
+        response: str
+        message: Optional[str] = None
+    
+    @app.post("/chat", response_model=ChatResponse)
+    async def chat_endpoint(request: ChatRequest):
+        result = await process_chatbot_query(request.message, request.user_id)
+        
+        if result["status"] == "error":
+            raise HTTPException(status_code=400, detail=result["message"])
+        
+        return ChatResponse(
+            status=result["status"],
+            response=result["response"]
+        )
+    
+    return app
+
+
+# Main execution
+if __name__ == "__main__":
+    # Run test
+    asyncio.run(test_chatbot())
